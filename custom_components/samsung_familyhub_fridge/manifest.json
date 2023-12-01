@@ -1,0 +1,18 @@
+{
+  "domain": "samsung_familyhub_fridge",
+  "name": "Samsung FamilyHub Fridge",
+  "version": "0.0.1",
+  "codeowners": [
+    "@ibielopolskyi"
+  ],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://www.home-assistant.io/integrations/samsung_familyhub_fridge",
+  "homekit": {},
+  "iot_class": "cloud_polling",
+  "requirements": [
+    "requests"
+  ],
+  "ssdp": [],
+  "zeroconf": []
+}
