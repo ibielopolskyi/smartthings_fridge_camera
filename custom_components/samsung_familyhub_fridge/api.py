@@ -2,22 +2,15 @@ from __future__ import annotations
 from datetime import timedelta
 import logging
 import time
-from typing import Any
 from homeassistant.helpers.update_coordinator import (
-    CoordinatorEntity,
     DataUpdateCoordinator,
-    UpdateFailed,
 )
 import requests
-import voluptuous as vol
 import async_timeout
 
-from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResult
-from homeassistant.exceptions import HomeAssistantError
 
-from .const import CID, DEFAULT_TIMEOUT, DOMAIN
+from .const import CID, DEFAULT_TIMEOUT
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,27 +36,28 @@ class DataCoordinator(DataUpdateCoordinator):
         This is the place to pre-process the data to lookup tables
         so entities can quickly look up their data.
         """
-        try:
-            # Note: asyncio.TimeoutError and aiohttp.ClientError are already
-            # handled by the data update coordinator.
-            async with async_timeout.timeout(10000):
-                # Did we refresh on previous run?
-                if self.api.should_update:
-                    await self._hass.async_add_executor_job(self.api.update_camera)
-                    self.api.should_update = False
-                elif set(self.last_file_ids) != set(self.api.get_file_ids()):
-                    await self._hass.async_add_executor_job(self.api.download_images)
-                    self.last_updated_at = time.time()
-                    self.last_file_ids = self.api.get_file_ids()
-                else:
-                    status = await self._hass.async_add_executor_job(
-                        self.api.get_all_device_status
-                    )
-                    self.api.set_device_status(status)
-                    self.api.extract_device_data()
-
-        except Exception as err:
-            raise err
+        # Note: asyncio.TimeoutError and aiohttp.ClientError are already
+        # handled by the data update coordinator.
+        async with async_timeout.timeout(10000):
+            # Did we refresh on previous run?
+            if self.api.device_id is None:
+                status = await self._hass.async_add_executor_job(
+                    self.api.get_all_device_status
+                )
+                self.api.set_device_status(status)
+            if self.api.should_update:
+                await self._hass.async_add_executor_job(self.api.update_camera)
+                self.api.should_update = False
+            elif set(self.last_file_ids) != set(self.api.get_file_ids()):
+                await self._hass.async_add_executor_job(self.api.download_images)
+                self.last_updated_at = time.time()
+                self.last_file_ids = self.api.get_file_ids()
+            else:
+                status = await self._hass.async_add_executor_job(
+                    self.api.get_current_device_status
+                )
+                self.api.set_current_device_status(status)
+                self.api.extract_device_data()
 
 
 class FamilyHub:
@@ -80,6 +74,7 @@ class FamilyHub:
         self._headers = {"Authorization": f"Bearer {self.token}"}
         self.images = []
         self._device_status = None
+        self._current_device_status = None
         self.last_closed = None
         self.should_update = False
         self.downloaded_images = [None, None, None]
@@ -98,12 +93,15 @@ class FamilyHub:
     def set_device_status(self, status):
         self._device_status = status
 
+    def set_current_device_status(self, status):
+        self._current_device_status = status
+
     def download_images(self):
         """Download the actual camera image from smartthings.
 
         Saves the image to it's designated index
         """
-        if not self._device_status or not self.device_id:
+        if not self._current_device_status or not self.device_id:
             return [None, None, None]
         result = []
         for file_id in self.get_file_ids():
@@ -126,31 +124,27 @@ class FamilyHub:
             timeout=DEFAULT_TIMEOUT,
         ).json()
 
+    def get_current_device_status(self):
+        return requests.get(
+            f"https://api.smartthings.com/v1/devices/{self.device_id}/components/main/status",
+            headers=self._headers,
+            timeout=DEFAULT_TIMEOUT,
+        ).json()
+
     def extract_device_data(self):
-        if not self._device_status:
+        # test['contactSensor']['contact']['value']
+        if not self._current_device_status:
             return
-        for element in self._device_status["items"]:
-            if (
-                element.get("deviceId") == self.device_id
-                and element["componentId"] == "main"
-            ):
-                if (
-                    element["capabilityId"] == "contactSensor"
-                    and element["value"] == "closed"
-                ):
-                    if self.last_closed != element["timestamp"]:
-                        self.last_closed = element["timestamp"]
-                        self.should_update = True
+        contact = self._current_device_status["contactSensor"]["contact"]
+        if contact["value"] == "closed" and contact["timestamp"] != self.last_closed:
+            self.last_closed = contact["timestamp"]
+            self.should_update = True
 
     def get_file_ids(self):
-        if not self._device_status:
+        if not self._current_device_status:
             return []
-        for element in self._device_status["items"]:
-            if (
-                element["capabilityId"] == "samsungce.viewInside"
-                and element["attributeName"] == "contents"
-            ):
-                return [i["fileId"] for i in element["value"]]
+        element = self._current_device_status["samsungce.viewInside"]["contents"]
+        return [i["fileId"] for i in element["value"]]
 
     def set_device_id(self):
         if not self._device_status:
@@ -188,3 +182,4 @@ class FamilyHub:
             },
             timeout=DEFAULT_TIMEOUT,
         )
+
