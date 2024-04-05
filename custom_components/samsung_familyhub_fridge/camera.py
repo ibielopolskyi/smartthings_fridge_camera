@@ -49,9 +49,9 @@ async def async_setup_entry(
     # )
     async_add_entities(
         [
-            FamilyHubCamera("top", 0, hub),
-            FamilyHubCamera("middle", 1, hub),
-            FamilyHubCamera("bottom", 2, hub),
+            FamilyHubCamera("family_hub_top", 0, hub),
+            FamilyHubCamera("family_hub_middle", 1, hub),
+            FamilyHubCamera("family_hub_bottom", 2, hub),
         ]
     )
 
