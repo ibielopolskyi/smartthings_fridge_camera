@@ -18,38 +18,38 @@ When it comes to the installation, you have two options:
 
 First, navigate to the HACS tab on your Home Assistant instance. On this page, click the three dots in the top right corner and select "Custom repositories":
 <p float="left">
-  <img src="assets/install/install-step-1.png" width=1200  alt="dashboard-demo"/>
+  <img src="assets/install/install-step-1.png" width=1200  alt="install-step-1"/>
 </p>
 
 
 In the floating window, please enter the link to the repository and select "Integration" as the type. (Just copy the link from the browser as shown)
 <p float="left">
-  <img src="assets/install/install-step-2.png" width=600  alt="dashboard-demo"/>
-  <img src="assets/install/install-step-2_1.png" width=600  alt="dashboard-demo"/>
+  <img src="assets/install/install-step-2.png" width=600  alt="install-step-2"/>
+  <img src="assets/install/install-step-2_1.png" width=600  alt="install-step-2_1"/>
 </p>
 
 
 After clicking the "Add" button, the repository should be added at the top as follows:
 <p float="left">
-  <img src="assets/install/install-step-3.png" width=1200  alt="dashboard-demo"/>
+  <img src="assets/install/install-step-3.png" width=1200  alt="install-step-3"/>
 </p>
 
 
 Next, search for your recently added repository in the HACS search bar and click on it:
 <p float="left">
-  <img src="assets/install/install-step-4.png" width=1200  alt="dashboard-demo"/>
+  <img src="assets/install/install-step-4.png" width=1200  alt="install-step-4"/>
 </p>
 
 
 Click the "Download" button in the bottom right:
 <p float="left">
-  <img src="assets/install/install-step-5.png" width=1200  alt="dashboard-demo"/>
+  <img src="assets/install/install-step-5.png" width=1200  alt="install-step-5"/>
 </p>
 
 
 Confirm the download of the latest version by clicking "Download". If everything works, you should see a success message afterwards:
 <p float="left">
-  <img src="assets/install/install-step-6.png" width=1200  alt="dashboard-demo"/>
+  <img src="assets/install/install-step-6.png" width=1200  alt="install-step-6"/>
 </p>
 
 
@@ -83,8 +83,8 @@ After a correct installation, your configuration directory should look like the 
 
 For reference:
 <p float="left">
-  <img src="assets/install/install-step-manual-1.png" width=600  alt="dashboard-demo"/>
-  <img src="assets/install/install-step-manual-2.png" width=600  alt="dashboard-demo"/>
+  <img src="assets/install/install-step-manual-1.png" width=600  alt="install-step-manual-1"/>
+  <img src="assets/install/install-step-manual-2.png" width=600  alt="install-step-manual-2"/>
 </p>
 
 ### !!! Make sure to reboot Home Assistant after importing all files !!!
@@ -96,19 +96,19 @@ After the installation was successful, you can now configure the integration.
 
 Navigate to "Settings" > "Devices & service":
 <p float="left">
-  <img src="assets/config/config-step-1.png" width=1200  alt="dashboard-demo"/>
+  <img src="assets/config/config-step-1.png" width=1200  alt="config-step-1"/>
 </p>
 
 
 Click "Add Integration" in the bottom right:
 <p float="left">
-  <img src="assets/config/config-step-2.png" width=1200  alt="dashboard-demo"/>
+  <img src="assets/config/config-step-2.png" width=1200  alt="config-step-2"/>
 </p>
 
 
 Search for the FamilyHub Integration you just downloaded and select it:
 <p float="left">
-  <img src="assets/config/config-step-3.png" width=1200  alt="dashboard-demo"/>
+  <img src="assets/config/config-step-3.png" width=1200  alt="config-step-3"/>
 </p>
 
 
@@ -117,31 +117,31 @@ You can create a token from here: https://account.smartthings.com/tokens.</br>
 And get your device ID from here: https://my.smartthings.com/advanced/devices.</br>
 Click "Submit" to finish the setup:
 <p float="left">
-  <img src="assets/config/config-step-4.png" width=1200  alt="dashboard-demo"/>
+  <img src="assets/config/config-step-4.png" width=1200  alt="config-step-4"/>
 </p>
 
 
 If everything worked, you should see a success message:
 <p float="left">
-  <img src="assets/config/config-step-5.png" width=1200  alt="dashboard-demo"/>
+  <img src="assets/config/config-step-5.png" width=1200  alt="config-step-5"/>
 </p>
 
 
 Now let's add the camera to your dashboard. Navigate to your dashboard and add a card. Select the "Picture entity" card:
 <p float="left">
-  <img src="assets/config/config-step-6.png" width=1200  alt="dashboard-demo"/>
+  <img src="assets/config/config-step-6.png" width=1200  alt="config-step-6"/>
 </p>
 
 
 As the entity, you need to select your camera. You will see more than one camera entity. Just select the one that is working for you:
 <p float="left">
-  <img src="assets/config/config-step-7.png" width=1200  alt="dashboard-demo"/>
+  <img src="assets/config/config-step-7.png" width=1200  alt="config-step-7"/>
 </p>
 
 
 Make sure to select the additional settings as follows and click "Save":
 <p float="left">
-  <img src="assets/config/config-step-8.png" width=1200  alt="dashboard-demo"/>
+  <img src="assets/config/config-step-8.png" width=1200  alt="config-step-8"/>
 </p>
 
 
