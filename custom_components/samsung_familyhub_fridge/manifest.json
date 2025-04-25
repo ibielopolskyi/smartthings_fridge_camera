@@ -7,9 +7,11 @@
   ],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://www.home-assistant.io/integrations/samsung_familyhub_fridge",
+  "documentation": "https://github.com/ibielopolskyi/smartthings_fridge_camera",
+  "integration_type": "hub",
   "homekit": {},
   "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/ibielopolskyi/smartthings_fridge_camera/issues",
   "requirements": [
     "requests"
   ],
