@@ -3,8 +3,15 @@
     "step": {
       "user": {
         "data": {
-          "token": "Smartthings Token",
+          "token": "SmartThings Token",
           "device_id": "Device ID"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate SmartThings",
+        "description": "Your SmartThings token has expired. Please enter a new token from https://account.smartthings.com/tokens",
+        "data": {
+          "token": "New SmartThings Token"
         }
       }
     },
@@ -14,7 +21,8 @@
       "unknown": "[%key:common::config_flow::error::unknown%]"
     },
     "abort": {
-      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
+      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
+      "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]"
     }
   }
 }

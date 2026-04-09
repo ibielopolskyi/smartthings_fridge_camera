@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import requests
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -12,8 +11,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 
-from .api import FamilyHub
-from .const import CID, DEFAULT_TIMEOUT, DOMAIN
+from .api import AuthenticationError, FamilyHub
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,31 +26,18 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 
 
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
-    """Validate the user input allows us to connect.
-
-    Data has the keys from STEP_USER_DATA_SCHEMA with values provided by the user.
-    """
-    # TODO validate the data can be used to set up a connection.
-
-    # If your PyPI package is not built with async, pass your methods
-    # to the executor:
-    # await hass.async_add_executor_job(
-    #     your_validate_func,
-    # )
-
+    """Validate the user input allows us to connect."""
     hub = FamilyHub(hass, data["token"], data.get("device_id"))
 
-    if not await hub.authenticate():
-        raise InvalidAuth
+    try:
+        if not await hub.authenticate():
+            raise InvalidAuth
+    except AuthenticationError as err:
+        raise InvalidAuth from err
+
     if not data.get("device_id"):
         data["device_id"] = hub.device_id
-    # data["device_id"] = hub.get_device_id()
-    # If you cannot connect:
-    # throw CannotConnect
-    # If the authentication is wrong:
-    # InvalidAuth
 
-    # Return data that you want to store in the config entry.
     return data
 
 
@@ -80,6 +66,38 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
+        )
+
+    async def async_step_reauth(
+        self, entry_data: dict[str, Any]
+    ) -> FlowResult:
+        """Handle re-authentication when the token has expired."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle user input for re-authentication."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            reauth_entry = self._get_reauth_entry()
+            new_data = {**reauth_entry.data, "token": user_input["token"]}
+            try:
+                await validate_input(self.hass, new_data)
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.exception("Unexpected exception during re-auth")
+                errors["base"] = "unknown"
+            else:
+                return self.async_update_reload_and_abort(
+                    reauth_entry, data=new_data
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({vol.Required("token"): str}),
+            errors=errors,
         )
 
 
