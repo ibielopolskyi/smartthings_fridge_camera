@@ -1,10 +1,15 @@
 """Minimal Home Assistant mocks for testing the custom component."""
 
+import json
+import logging
+import os
 import sys
 import types
 from unittest.mock import MagicMock, AsyncMock
 
 import pytest
+
+_logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -16,7 +21,7 @@ def pytest_addoption(parser):
         "--smartthings-token",
         action="store",
         default=None,
-        help="SmartThings personal access token for integration tests",
+        help="SmartThings personal access token (PAT) for integration tests",
     )
     parser.addoption(
         "--device-id",
@@ -24,16 +29,74 @@ def pytest_addoption(parser):
         default=None,
         help="SmartThings device ID for integration tests",
     )
+    parser.addoption(
+        "--credentials",
+        action="store",
+        default=None,
+        help=(
+            "Path to .smartthings_credentials.json (from scripts/get_token.py). "
+            "If provided, the refresh token is used to obtain a fresh access token "
+            "automatically before tests run."
+        ),
+    )
 
 
 @pytest.fixture
 def smartthings_token(request):
-    return request.config.getoption("--smartthings-token")
+    """Provide a valid SmartThings access token.
+
+    Resolution order:
+      1. --smartthings-token CLI flag (raw PAT)
+      2. --credentials file (auto-refreshes via OAuth)
+    """
+    # Direct token takes precedence
+    token = request.config.getoption("--smartthings-token")
+    if token:
+        return token
+
+    # Fall back to credentials file with auto-refresh
+    creds_path = request.config.getoption("--credentials")
+    if creds_path:
+        return _get_refreshed_token(creds_path)
+
+    return None
 
 
 @pytest.fixture
 def device_id(request):
     return request.config.getoption("--device-id")
+
+
+def _get_refreshed_token(creds_path: str) -> str:
+    """Load credentials file, refresh the access token, save updated file."""
+    # Resolve path relative to repo root
+    if not os.path.isabs(creds_path):
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        creds_path = os.path.join(repo_root, creds_path)
+
+    with open(creds_path) as f:
+        creds = json.load(f)
+
+    # Late import so HA stubs are already in place
+    from custom_components.samsung_familyhub_fridge.auth import SmartThingsOAuth
+
+    oauth = SmartThingsOAuth(
+        client_id=creds["client_id"],
+        client_secret=creds["client_secret"],
+    )
+
+    _logger.info("Refreshing SmartThings access token via OAuth...")
+    new_creds = oauth.refresh(creds["refresh_token"])
+
+    # Update the file so the next run uses the fresh refresh_token
+    creds["access_token"] = new_creds.access_token
+    creds["refresh_token"] = new_creds.refresh_token
+    creds["expires_in"] = new_creds.expires_in
+    with open(creds_path, "w") as f:
+        json.dump(creds, f, indent=2)
+
+    _logger.info("Token refreshed successfully (expires in %ds)", new_creds.expires_in)
+    return new_creds.access_token
 
 
 def _make_module(name, **attrs):

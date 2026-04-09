@@ -1,13 +1,20 @@
 """Integration tests that hit the real SmartThings API.
 
-Run with:
+Run with a personal access token:
     pytest tests/test_integration.py -m integration \
         --smartthings-token YOUR_TOKEN \
         --device-id YOUR_DEVICE_ID
 
-All tests in this file are skipped unless --smartthings-token is provided.
+Or with OAuth credentials (auto-refreshes the token):
+    pytest tests/test_integration.py -m integration \
+        --credentials .smartthings_credentials.json \
+        --device-id YOUR_DEVICE_ID
+
+All tests in this file are skipped unless a token source is provided.
 --device-id is optional; tests that need it will be skipped individually.
 """
+
+import os
 
 import pytest
 
@@ -21,9 +28,16 @@ from custom_components.samsung_familyhub_fridge.api import (
 from custom_components.samsung_familyhub_fridge.const import CID
 
 
+def _has_token(config):
+    return (
+        config.getoption("--smartthings-token") is not None
+        or config.getoption("--credentials") is not None
+    )
+
+
 needs_token = pytest.mark.skipif(
-    "not config.getoption('--smartthings-token')",
-    reason="--smartthings-token not provided",
+    "not _has_token(config)",
+    reason="--smartthings-token or --credentials not provided",
 )
 needs_device = pytest.mark.skipif(
     "not config.getoption('--device-id')",
@@ -241,3 +255,75 @@ class TestCoordinatorRealApi:
 
         with pytest.raises(_ConfigEntryAuthFailed):
             await coordinator._async_update_data()
+
+
+# ---------------------------------------------------------------------------
+# 6. OAuth token refresh (requires --credentials)
+# ---------------------------------------------------------------------------
+
+
+needs_credentials = pytest.mark.skipif(
+    "not config.getoption('--credentials')",
+    reason="--credentials not provided",
+)
+
+
+@pytest.mark.integration
+class TestOAuthTokenRefresh:
+    """Verify the OAuth refresh flow works against the real SmartThings API."""
+
+    @needs_credentials
+    def test_refresh_produces_valid_token(self, request):
+        """Refreshing via OAuth should yield a token that works with the API."""
+        import json
+        from custom_components.samsung_familyhub_fridge.auth import SmartThingsOAuth
+
+        creds_path = request.config.getoption("--credentials")
+        if not os.path.isabs(creds_path):
+            repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            creds_path = os.path.join(repo_root, creds_path)
+
+        with open(creds_path) as f:
+            creds = json.load(f)
+
+        oauth = SmartThingsOAuth(
+            client_id=creds["client_id"],
+            client_secret=creds["client_secret"],
+        )
+        new_creds = oauth.refresh(creds["refresh_token"])
+
+        assert new_creds.access_token
+        assert new_creds.refresh_token
+        assert new_creds.expires_in > 0
+
+        # Verify the new token actually works against the API
+        hass = _HomeAssistant()
+        hub = FamilyHub(hass, token=new_creds.access_token, device_id="")
+        result = hub.get_all_device_status()
+        assert isinstance(result, dict)
+        assert "items" in result
+
+    @needs_credentials
+    def test_refreshed_token_differs_from_original(self, request):
+        """Each refresh should return a new token pair."""
+        import json
+        from custom_components.samsung_familyhub_fridge.auth import SmartThingsOAuth
+
+        creds_path = request.config.getoption("--credentials")
+        if not os.path.isabs(creds_path):
+            repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            creds_path = os.path.join(repo_root, creds_path)
+
+        with open(creds_path) as f:
+            creds = json.load(f)
+
+        oauth = SmartThingsOAuth(
+            client_id=creds["client_id"],
+            client_secret=creds["client_secret"],
+        )
+        first = oauth.refresh(creds["refresh_token"])
+        second = oauth.refresh(first.refresh_token)
+
+        # Tokens should be different on each refresh
+        assert first.access_token != second.access_token
+        assert first.refresh_token != second.refresh_token
