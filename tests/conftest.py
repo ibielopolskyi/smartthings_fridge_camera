@@ -4,6 +4,37 @@ import sys
 import types
 from unittest.mock import MagicMock, AsyncMock
 
+import pytest
+
+
+# ---------------------------------------------------------------------------
+# pytest CLI options for integration tests
+# ---------------------------------------------------------------------------
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--smartthings-token",
+        action="store",
+        default=None,
+        help="SmartThings personal access token for integration tests",
+    )
+    parser.addoption(
+        "--device-id",
+        action="store",
+        default=None,
+        help="SmartThings device ID for integration tests",
+    )
+
+
+@pytest.fixture
+def smartthings_token(request):
+    return request.config.getoption("--smartthings-token")
+
+
+@pytest.fixture
+def device_id(request):
+    return request.config.getoption("--device-id")
+
 
 def _make_module(name, **attrs):
     mod = types.ModuleType(name)
