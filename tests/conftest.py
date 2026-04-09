@@ -39,6 +39,30 @@ def pytest_addoption(parser):
             "automatically before tests run."
         ),
     )
+    parser.addoption(
+        "--samsung-email",
+        action="store",
+        default=None,
+        help="Samsung Account email for headless login",
+    )
+    parser.addoption(
+        "--samsung-password",
+        action="store",
+        default=None,
+        help="Samsung Account password for headless login",
+    )
+    parser.addoption(
+        "--signin-client-id",
+        action="store",
+        default=None,
+        help="Samsung OAuth signin_client_id (from SmartThings APK)",
+    )
+    parser.addoption(
+        "--signin-client-secret",
+        action="store",
+        default=None,
+        help="Samsung OAuth signin_client_secret (from SmartThings APK)",
+    )
 
 
 @pytest.fixture
@@ -48,6 +72,7 @@ def smartthings_token(request):
     Resolution order:
       1. --smartthings-token CLI flag (raw PAT)
       2. --credentials file (auto-refreshes via OAuth)
+      3. --samsung-email + --samsung-password (headless login)
     """
     # Direct token takes precedence
     token = request.config.getoption("--smartthings-token")
@@ -58,6 +83,14 @@ def smartthings_token(request):
     creds_path = request.config.getoption("--credentials")
     if creds_path:
         return _get_refreshed_token(creds_path)
+
+    # Fall back to headless Samsung Account login
+    email = request.config.getoption("--samsung-email")
+    password = request.config.getoption("--samsung-password")
+    signin_id = request.config.getoption("--signin-client-id")
+    signin_secret = request.config.getoption("--signin-client-secret")
+    if email and password and signin_id and signin_secret:
+        return _headless_login(email, password, signin_id, signin_secret)
 
     return None
 
@@ -97,6 +130,23 @@ def _get_refreshed_token(creds_path: str) -> str:
 
     _logger.info("Token refreshed successfully (expires in %ds)", new_creds.expires_in)
     return new_creds.access_token
+
+
+def _headless_login(email: str, password: str, signin_id: str, signin_secret: str) -> str:
+    """Log in to Samsung Account with email + password and return a bearer token."""
+    from custom_components.samsung_familyhub_fridge.auth import SamsungAccountAuth
+
+    auth = SamsungAccountAuth(
+        email=email,
+        password=password,
+        signin_client_id=signin_id,
+        signin_client_secret=signin_secret,
+    )
+
+    _logger.info("Logging in to Samsung Account (headless) as %s...", email)
+    creds = auth.login()
+    _logger.info("Samsung Account login successful")
+    return creds.access_token
 
 
 def _make_module(name, **attrs):

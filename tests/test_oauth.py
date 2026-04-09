@@ -1,13 +1,18 @@
-"""Unit tests for the SmartThingsOAuth module."""
+"""Unit tests for the SmartThingsOAuth and SamsungAccountAuth modules."""
 
 import pytest
 import requests_mock as rm
 
 from custom_components.samsung_familyhub_fridge.auth import (
     SmartThingsOAuth,
+    SamsungAccountAuth,
     OAuthCredentials,
+    LoginCredentials,
+    AuthError,
     AUTHORIZE_URL,
     TOKEN_URL,
+    SAMSUNG_AUTH_URL,
+    SAMSUNG_TOKEN_URL,
     _generate_pkce_pair,
 )
 
@@ -186,3 +191,121 @@ class TestOAuthCredentials:
         assert creds.refresh_token == "rt"
         assert creds.token_type == "bearer"
         assert creds.expires_in == 3600
+
+
+# ======================================================================
+# SamsungAccountAuth (headless email/password login)
+# ======================================================================
+
+
+@pytest.fixture
+def samsung_auth():
+    return SamsungAccountAuth(
+        email="user@example.com",
+        password="my-password",
+        signin_client_id="test-signin-id",
+        signin_client_secret="test-signin-secret",
+        client_id="test-client-id",
+    )
+
+
+class TestSamsungAccountLogin:
+    """Test the two-step headless Samsung Account login flow."""
+
+    def test_login_success(self, samsung_auth):
+        with rm.Mocker() as m:
+            m.post(SAMSUNG_AUTH_URL, json={"userauth_token": "utoken-123"})
+            m.post(
+                SAMSUNG_TOKEN_URL,
+                json={"token": {"access_token": "bearer-abc"}},
+            )
+            creds = samsung_auth.login()
+
+        assert creds.access_token == "bearer-abc"
+        assert creds.userauth_token == "utoken-123"
+
+    def test_step1_sends_email_and_password(self, samsung_auth):
+        with rm.Mocker() as m:
+            m.post(SAMSUNG_AUTH_URL, json={"userauth_token": "tok"})
+            m.post(SAMSUNG_TOKEN_URL, json={"token": {"access_token": "a"}})
+            samsung_auth.login()
+
+        step1_body = m.request_history[0].body
+        assert "login_id=user%40example.com" in step1_body or "login_id=user@example.com" in step1_body
+        assert "password=my-password" in step1_body
+        assert "signin_client_id=test-signin-id" in step1_body
+        assert "signin_client_secret=test-signin-secret" in step1_body
+        assert "login_id_type=email_id" in step1_body
+
+    def test_step2_sends_userauth_token(self, samsung_auth):
+        with rm.Mocker() as m:
+            m.post(SAMSUNG_AUTH_URL, json={"userauth_token": "utoken-xyz"})
+            m.post(SAMSUNG_TOKEN_URL, json={"token": {"access_token": "a"}})
+            samsung_auth.login()
+
+        step2_body = m.request_history[1].body
+        assert "userauth_token=utoken-xyz" in step2_body
+        assert "client_id=test-client-id" in step2_body
+        assert "com.samsung.android.oneconnect" in step2_body
+
+    def test_step1_401_raises_auth_error(self, samsung_auth):
+        with rm.Mocker() as m:
+            m.post(SAMSUNG_AUTH_URL, status_code=401)
+            with pytest.raises(AuthError, match="Invalid Samsung Account"):
+                samsung_auth.login()
+
+    def test_step1_403_raises_auth_error_with_2fa_hint(self, samsung_auth):
+        with rm.Mocker() as m:
+            m.post(SAMSUNG_AUTH_URL, status_code=403)
+            with pytest.raises(AuthError, match="2FA"):
+                samsung_auth.login()
+
+    def test_step1_missing_userauth_token_raises(self, samsung_auth):
+        with rm.Mocker() as m:
+            m.post(SAMSUNG_AUTH_URL, json={"error": "some_error"})
+            with pytest.raises(AuthError, match="userauth_token"):
+                samsung_auth.login()
+
+    def test_step2_missing_token_raises(self, samsung_auth):
+        with rm.Mocker() as m:
+            m.post(SAMSUNG_AUTH_URL, json={"userauth_token": "tok"})
+            m.post(SAMSUNG_TOKEN_URL, json={"error": "invalid_grant"})
+            with pytest.raises(AuthError, match="Token exchange failed"):
+                samsung_auth.login()
+
+    def test_step1_content_type_header(self, samsung_auth):
+        with rm.Mocker() as m:
+            m.post(SAMSUNG_AUTH_URL, json={"userauth_token": "tok"})
+            m.post(SAMSUNG_TOKEN_URL, json={"token": {"access_token": "a"}})
+            samsung_auth.login()
+
+        assert (
+            m.request_history[0].headers["Content-Type"]
+            == "application/x-www-form-urlencoded;charset=UTF-8"
+        )
+
+    def test_device_id_derived_from_email(self):
+        auth1 = SamsungAccountAuth(
+            email="a@b.com", password="p",
+            signin_client_id="c", signin_client_secret="s",
+        )
+        auth2 = SamsungAccountAuth(
+            email="a@b.com", password="p",
+            signin_client_id="c", signin_client_secret="s",
+        )
+        auth3 = SamsungAccountAuth(
+            email="different@b.com", password="p",
+            signin_client_id="c", signin_client_secret="s",
+        )
+        assert auth1._device_id == auth2._device_id
+        assert auth1._device_id != auth3._device_id
+
+
+class TestLoginCredentials:
+    def test_dataclass_fields(self):
+        creds = LoginCredentials(
+            access_token="bearer-tok",
+            userauth_token="uauth-tok",
+        )
+        assert creds.access_token == "bearer-tok"
+        assert creds.userauth_token == "uauth-tok"

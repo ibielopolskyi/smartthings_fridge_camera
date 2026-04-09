@@ -32,6 +32,12 @@ def _has_token(config):
     return (
         config.getoption("--smartthings-token") is not None
         or config.getoption("--credentials") is not None
+        or (
+            config.getoption("--samsung-email") is not None
+            and config.getoption("--samsung-password") is not None
+            and config.getoption("--signin-client-id") is not None
+            and config.getoption("--signin-client-secret") is not None
+        )
     )
 
 
