@@ -1,4 +1,4 @@
-"""Integration tests for auth refresh, error detection, and defensive error handling."""
+"""Unit tests for auth refresh, error detection, and defensive error handling."""
 
 import pytest
 import requests_mock as rm
