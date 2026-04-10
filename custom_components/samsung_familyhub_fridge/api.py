@@ -5,8 +5,8 @@ import time
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
 )
+from homeassistant.exceptions import ConfigEntryAuthFailed
 import requests
-import async_timeout
 
 from homeassistant.core import HomeAssistant
 
@@ -15,14 +15,16 @@ from .const import CID, DEFAULT_TIMEOUT
 _LOGGER = logging.getLogger(__name__)
 
 
+class AuthenticationError(Exception):
+    """Raised when SmartThings API returns an authentication error (401/403)."""
+
+
 class DataCoordinator(DataUpdateCoordinator):
     def __init__(self, hass: HomeAssistant, api: FamilyHub):
         super().__init__(
             hass,
             _LOGGER,
-            # Name of the data. For logging purposes.
             name="File ID refresher",
-            # Polling interval. Will only be polled if there are subscribers.
             update_interval=timedelta(seconds=10),
         )
         self._hass = hass
@@ -31,15 +33,8 @@ class DataCoordinator(DataUpdateCoordinator):
         self.last_updated_at = None
 
     async def _async_update_data(self):
-        """Fetch data from API endpoint.
-
-        This is the place to pre-process the data to lookup tables
-        so entities can quickly look up their data.
-        """
-        # Note: asyncio.TimeoutError and aiohttp.ClientError are already
-        # handled by the data update coordinator.
-        async with async_timeout.timeout(10000):
-            # Did we refresh on previous run?
+        """Fetch data from API endpoint."""
+        try:
             if self.api.device_id is None:
                 status = await self._hass.async_add_executor_job(
                     self.api.get_all_device_status
@@ -58,13 +53,15 @@ class DataCoordinator(DataUpdateCoordinator):
                 )
                 self.api.set_current_device_status(status)
                 self.api.extract_device_data()
+        except AuthenticationError as err:
+            raise ConfigEntryAuthFailed(
+                "SmartThings token expired or is invalid. "
+                "Please re-authenticate with a new token."
+            ) from err
 
 
 class FamilyHub:
-    """Placeholder class to make tests pass.
-
-    TODO Remove this placeholder class and replace with things from your PyPI package.
-    """
+    """SmartThings Family Hub fridge API client."""
 
     def __init__(self, hass: HomeAssistant, token: str, device_id: str) -> None:
         """Initialize."""
@@ -79,11 +76,36 @@ class FamilyHub:
         self.should_update = False
         self.downloaded_images = [None, None, None]
 
+    def update_token(self, token: str) -> None:
+        """Update the API token (used after re-authentication)."""
+        self.token = token
+        self._headers = {"Authorization": f"Bearer {self.token}"}
+
     @property
     def device_id(self):
         if not self._device_id:
             self.set_device_id()
         return self._device_id
+
+    def _check_response(self, response: requests.Response) -> None:
+        """Check HTTP response for auth errors and raise accordingly."""
+        if response.status_code in (401, 403):
+            _LOGGER.error(
+                "SmartThings authentication failed (HTTP %s). "
+                "Token may have expired — SmartThings personal access tokens "
+                "expire after 24 hours",
+                response.status_code,
+            )
+            raise AuthenticationError(
+                f"SmartThings API returned HTTP {response.status_code}. "
+                "Token is expired or invalid."
+            )
+        if not response.ok:
+            _LOGGER.warning(
+                "SmartThings API request failed: HTTP %s - %s",
+                response.status_code,
+                response.text[:200],
+            )
 
     async def authenticate(self) -> bool:
         """Test if we can authenticate with the host."""
@@ -97,10 +119,7 @@ class FamilyHub:
         self._current_device_status = status
 
     def download_images(self):
-        """Download the actual camera image from smartthings.
-
-        Saves the image to it's designated index
-        """
+        """Download the actual camera images from SmartThings."""
         if not self._current_device_status or not self.device_id:
             return [None, None, None]
         result = []
@@ -110,57 +129,95 @@ class FamilyHub:
                 headers=self._headers,
                 timeout=DEFAULT_TIMEOUT,
             )
+            self._check_response(r)
             result.append(r.content)
         self.downloaded_images = result
 
     def get_all_device_status(self):
-        """Get all of the devices in the account.
-
-        Main source of data about the current status (Too lazy to use the subscriptions)
-        """
-        return requests.get(
+        """Get all of the devices in the account."""
+        r = requests.get(
             "https://client.smartthings.com/devices/status",
             headers=self._headers,
             timeout=DEFAULT_TIMEOUT,
-        ).json()
+        )
+        self._check_response(r)
+        data = r.json()
+        if isinstance(data, dict) and "error" in data:
+            _LOGGER.error(
+                "SmartThings API returned error: %s", data["error"]
+            )
+        return data
 
     def get_current_device_status(self):
-        return requests.get(
+        """Get the current device status."""
+        r = requests.get(
             f"https://api.smartthings.com/v1/devices/{self.device_id}/components/main/status",
             headers=self._headers,
             timeout=DEFAULT_TIMEOUT,
-        ).json()
+        )
+        self._check_response(r)
+        data = r.json()
+        if isinstance(data, dict) and "error" in data:
+            _LOGGER.error(
+                "SmartThings device status returned error: %s", data["error"]
+            )
+        return data
 
     def extract_device_data(self):
-        # test['contactSensor']['contact']['value']
+        """Extract contact sensor data to detect door close events."""
         if not self._current_device_status:
             return
-        contact = self._current_device_status["contactSensor"]["contact"]
+        try:
+            contact = self._current_device_status["contactSensor"]["contact"]
+        except KeyError:
+            _LOGGER.debug(
+                "contactSensor data not available in device status"
+            )
+            return
         if contact["value"] == "closed" and contact["timestamp"] != self.last_closed:
             self.last_closed = contact["timestamp"]
             self.should_update = True
 
     def get_file_ids(self):
+        """Get the file IDs for the camera images."""
         if not self._current_device_status:
             return []
-        element = self._current_device_status["samsungce.viewInside"]["contents"]
-        return [i["fileId"] for i in element["value"]]
+        try:
+            element = self._current_device_status["samsungce.viewInside"]["contents"]
+            return [i["fileId"] for i in element["value"]]
+        except (KeyError, TypeError):
+            _LOGGER.debug(
+                "samsungce.viewInside data not available in device status"
+            )
+            return []
 
     def set_device_id(self):
+        """Extract device ID from the device status list."""
         if not self._device_status:
             return
-        for element in self._device_status["items"]:
+        try:
+            items = self._device_status["items"]
+        except (KeyError, TypeError):
+            _LOGGER.error(
+                "Unexpected device status format — missing 'items' key. "
+                "This may indicate an expired token or API error. "
+                "Response: %s",
+                str(self._device_status)[:200],
+            )
+            return
+        for element in items:
             if (
-                element["capabilityId"] == "samsungce.viewInside"
-                and element["attributeName"] == "contents"
+                element.get("capabilityId") == "samsungce.viewInside"
+                and element.get("attributeName") == "contents"
             ):
                 self._device_id = element["deviceId"]
                 break
 
     def update_camera(self):
+        """Send a refresh command to the fridge camera."""
         if not self.device_id:
             return
-        requests.post(
+        r = requests.post(
             f"https://api.smartthings.com/v1/devices/{self.device_id}/commands",
             headers=self._headers,
             json={
@@ -182,4 +239,5 @@ class FamilyHub:
             },
             timeout=DEFAULT_TIMEOUT,
         )
+        self._check_response(r)
 

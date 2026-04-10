@@ -8,7 +8,6 @@ from homeassistant.core import HomeAssistant
 from .api import FamilyHub
 from .const import DOMAIN
 
-# For your initial PR, limit it to 1 platform.
 PLATFORMS: list[Platform] = [Platform.CAMERA, Platform.SENSOR]
 
 
@@ -16,14 +15,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Samsung FamilyHub Fridge from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
-    hass.data[DOMAIN][entry.entry_id] = entry
-    hass.data[DOMAIN]["hub"] = FamilyHub(
+    hub = FamilyHub(
         hass, entry.data["token"], entry.data.get("device_id")
     )
+    hass.data[DOMAIN][entry.entry_id] = entry
+    hass.data[DOMAIN]["hub"] = hub
+
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
+
+
+async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Handle config entry updates (e.g. after re-authentication)."""
+    hub: FamilyHub = hass.data[DOMAIN]["hub"]
+    hub.update_token(entry.data["token"])
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
