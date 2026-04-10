@@ -46,14 +46,23 @@ class DataCoordinator(DataUpdateCoordinator):
                 await self._hass.async_add_executor_job(self.api.update_camera)
                 self.api.should_update = False
             elif set(self.last_file_ids) != set(self.api.get_file_ids()):
+                new_ids = self.api.get_file_ids()
                 _LOGGER.debug(
                     "file IDs changed: %s → %s, downloading images",
                     self.last_file_ids,
-                    self.api.get_file_ids(),
+                    new_ids,
                 )
-                await self._hass.async_add_executor_job(self.api.download_images)
-                self.last_updated_at = time.time()
-                self.last_file_ids = self.api.get_file_ids()
+                success = await self._hass.async_add_executor_job(
+                    self.api.download_images
+                )
+                if success:
+                    self.last_updated_at = time.time()
+                    self.last_file_ids = new_ids
+                else:
+                    _LOGGER.warning(
+                        "download_images returned no successes — will retry "
+                        "on next poll"
+                    )
             else:
                 status = await self._hass.async_add_executor_job(
                     self.api.get_current_device_status
@@ -131,74 +140,69 @@ class FamilyHub:
     def set_current_device_status(self, status):
         self._current_device_status = status
 
-    def download_images(self):
-        """Download the actual camera images from SmartThings."""
+    def download_images(self) -> bool:
+        """Download the actual camera images from SmartThings.
+
+        Returns True if at least one image was downloaded successfully.
+        Failed individual downloads preserve the previously-known image,
+        so a transient network error on one image doesn't wipe the others.
+        """
         if not self._current_device_status or not self.device_id:
-            return [None, None, None]
-        result = []
-        for idx, file_id in enumerate(self.get_file_ids()):
-            url = (
-                f"https://client.smartthings.com/udo/file_links/{file_id}"
-                f"?cid={CID}&di={self.device_id}"
-            )
-            r = requests.get(
-                url,
-                headers=self._headers,
-                timeout=DEFAULT_TIMEOUT,
-            )
-            self._check_response(r)
-            content_type = r.headers.get("content-type", "")
-            _LOGGER.debug(
-                "download_images[%d]: file_id=%s status=%s content_type=%s "
-                "length=%d first_bytes=%r",
-                idx,
-                file_id[:8],
-                r.status_code,
-                content_type,
-                len(r.content),
-                r.content[:32],
-            )
-            # The file_links endpoint returns JSON with a signed URL, not the
-            # image bytes directly. If we got JSON, follow it to fetch the
-            # actual image.
-            if "application/json" in content_type:
-                try:
-                    payload = r.json()
-                    image_url = (
-                        payload.get("url")
-                        or payload.get("fileUrl")
-                        or payload.get("downloadUrl")
-                    )
-                    _LOGGER.debug(
-                        "download_images[%d]: JSON payload keys=%s image_url=%s",
-                        idx,
-                        list(payload.keys()) if isinstance(payload, dict) else None,
-                        (image_url or "")[:120],
-                    )
-                    if image_url:
-                        img_r = requests.get(image_url, timeout=DEFAULT_TIMEOUT)
-                        _LOGGER.debug(
-                            "download_images[%d]: followed URL → status=%s "
-                            "length=%d",
-                            idx,
-                            img_r.status_code,
-                            len(img_r.content),
-                        )
-                        result.append(img_r.content)
-                        continue
-                except Exception as err:
-                    _LOGGER.warning(
-                        "download_images[%d]: failed to parse JSON: %s",
-                        idx,
-                        err,
-                    )
-            result.append(r.content)
+            return False
+
+        file_ids = self.get_file_ids()
+        # Start from the existing images so a partial failure doesn't wipe
+        # slots that we can't refresh this cycle.
+        result = list(self.downloaded_images)
+        while len(result) < len(file_ids):
+            result.append(None)
+
+        successes = 0
+        for idx, file_id in enumerate(file_ids):
+            try:
+                url = (
+                    f"https://client.smartthings.com/udo/file_links/{file_id}"
+                    f"?cid={CID}&di={self.device_id}"
+                )
+                r = requests.get(
+                    url,
+                    headers=self._headers,
+                    timeout=DEFAULT_TIMEOUT,
+                )
+                self._check_response(r)
+                content_type = r.headers.get("content-type", "")
+                _LOGGER.debug(
+                    "download_images[%d]: file_id=%s status=%s "
+                    "content_type=%s length=%d",
+                    idx,
+                    file_id[:8],
+                    r.status_code,
+                    content_type,
+                    len(r.content),
+                )
+                result[idx] = r.content
+                successes += 1
+            except AuthenticationError:
+                # Auth errors must propagate up so the coordinator can
+                # trigger reauth — do not swallow.
+                raise
+            except Exception as err:
+                _LOGGER.warning(
+                    "download_images[%d]: failed to download file_id=%s: %s",
+                    idx,
+                    file_id[:8],
+                    err,
+                )
+                # Keep the previous bytes for this slot (don't overwrite with None)
+
         self.downloaded_images = result
         _LOGGER.debug(
-            "download_images: stored %d images, sizes=%s",
-            len(result),
+            "download_images: stored %d/%d images, sizes=%s",
+            successes,
+            len(file_ids),
             [len(i) if i else 0 for i in result],
         )
+        return successes > 0
 
     def get_all_device_status(self):
         """Get all of the devices in the account."""
