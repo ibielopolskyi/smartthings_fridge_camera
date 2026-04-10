@@ -1,25 +1,11 @@
-from urllib.parse import urlencode
-
-import requests
-
-from homeassistant.components.camera import PLATFORM_SCHEMA, Camera
-from homeassistant.components.local_file.camera import LocalFile
+from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import HTTP_DIGEST_AUTHENTICATION
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from homeassistant.core import callback
 from .const import DOMAIN
-from .api import FamilyHub, DataCoordinator
-
-from homeassistant.components.sensor import PLATFORM_SCHEMA, SensorEntity
-from homeassistant.helpers.update_coordinator import (
-    CoordinatorEntity,
-    DataUpdateCoordinator,
-    UpdateFailed,
-)
+from .api import DataCoordinator
 
 
 async def async_setup_entry(
