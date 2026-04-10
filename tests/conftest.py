@@ -159,11 +159,28 @@ def _make_module(name, **attrs):
 # --- Stub out homeassistant and its subpackages ---
 
 
+class _ServiceRegistry:
+    def __init__(self):
+        self._services = {}
+
+    def async_register(self, domain, service, handler):
+        self._services[(domain, service)] = handler
+
+    def async_remove(self, domain, service):
+        self._services.pop((domain, service), None)
+
+
+class _ServiceCall:
+    def __init__(self, data=None):
+        self.data = data or {}
+
+
 class _HomeAssistant:
     """Minimal stub of homeassistant.core.HomeAssistant."""
 
     def __init__(self):
         self.async_add_executor_job = AsyncMock(side_effect=self._run_sync)
+        self.services = _ServiceRegistry()
 
     async def _run_sync(self, func, *args):
         return func(*args)
@@ -236,7 +253,12 @@ class _Platform:
 
 # Build fake module tree
 ha = _make_module("homeassistant")
-ha_core = _make_module("homeassistant.core", HomeAssistant=_HomeAssistant, callback=lambda f: f)
+ha_core = _make_module(
+    "homeassistant.core",
+    HomeAssistant=_HomeAssistant,
+    ServiceCall=_ServiceCall,
+    callback=lambda f: f,
+)
 ha_config_entries = _make_module(
     "homeassistant.config_entries",
     ConfigEntry=_ConfigEntry,

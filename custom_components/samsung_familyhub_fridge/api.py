@@ -36,14 +36,21 @@ class DataCoordinator(DataUpdateCoordinator):
         """Fetch data from API endpoint."""
         try:
             if self.api.device_id is None:
+                _LOGGER.debug("No device_id — fetching device list")
                 status = await self._hass.async_add_executor_job(
                     self.api.get_all_device_status
                 )
                 self.api.set_device_status(status)
             if self.api.should_update:
+                _LOGGER.debug("should_update=True → sending refresh command to fridge")
                 await self._hass.async_add_executor_job(self.api.update_camera)
                 self.api.should_update = False
             elif set(self.last_file_ids) != set(self.api.get_file_ids()):
+                _LOGGER.debug(
+                    "file IDs changed: %s → %s, downloading images",
+                    self.last_file_ids,
+                    self.api.get_file_ids(),
+                )
                 await self._hass.async_add_executor_job(self.api.download_images)
                 self.last_updated_at = time.time()
                 self.last_file_ids = self.api.get_file_ids()
@@ -53,6 +60,12 @@ class DataCoordinator(DataUpdateCoordinator):
                 )
                 self.api.set_current_device_status(status)
                 self.api.extract_device_data()
+                _LOGGER.debug(
+                    "polled status: last_closed=%s should_update=%s file_ids=%s",
+                    self.api.last_closed,
+                    self.api.should_update,
+                    self.api.get_file_ids(),
+                )
         except AuthenticationError as err:
             raise ConfigEntryAuthFailed(
                 "SmartThings token expired or is invalid. "
@@ -174,9 +187,22 @@ class FamilyHub:
                 "contactSensor data not available in device status"
             )
             return
-        if contact["value"] == "closed" and contact["timestamp"] != self.last_closed:
+        _LOGGER.debug(
+            "contactSensor: value=%s timestamp=%s (last_closed=%s)",
+            contact.get("value"),
+            contact.get("timestamp"),
+            self.last_closed,
+        )
+        # Trigger a refresh on first poll after startup, so users see fresh
+        # images without having to physically open and close the fridge door.
+        first_poll = self.last_closed is None
+        if contact["value"] == "closed" and (
+            first_poll or contact["timestamp"] != self.last_closed
+        ):
             self.last_closed = contact["timestamp"]
             self.should_update = True
+            if first_poll:
+                _LOGGER.debug("First poll after startup — requesting camera refresh")
 
     def get_file_ids(self):
         """Get the file IDs for the camera images."""
