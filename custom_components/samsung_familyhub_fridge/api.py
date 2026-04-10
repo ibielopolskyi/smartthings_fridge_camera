@@ -136,15 +136,69 @@ class FamilyHub:
         if not self._current_device_status or not self.device_id:
             return [None, None, None]
         result = []
-        for file_id in self.get_file_ids():
+        for idx, file_id in enumerate(self.get_file_ids()):
+            url = (
+                f"https://client.smartthings.com/udo/file_links/{file_id}"
+                f"?cid={CID}&di={self.device_id}"
+            )
             r = requests.get(
-                f"https://client.smartthings.com/udo/file_links/{file_id}?cid={CID}&di={self.device_id}",
+                url,
                 headers=self._headers,
                 timeout=DEFAULT_TIMEOUT,
             )
             self._check_response(r)
+            content_type = r.headers.get("content-type", "")
+            _LOGGER.debug(
+                "download_images[%d]: file_id=%s status=%s content_type=%s "
+                "length=%d first_bytes=%r",
+                idx,
+                file_id[:8],
+                r.status_code,
+                content_type,
+                len(r.content),
+                r.content[:32],
+            )
+            # The file_links endpoint returns JSON with a signed URL, not the
+            # image bytes directly. If we got JSON, follow it to fetch the
+            # actual image.
+            if "application/json" in content_type:
+                try:
+                    payload = r.json()
+                    image_url = (
+                        payload.get("url")
+                        or payload.get("fileUrl")
+                        or payload.get("downloadUrl")
+                    )
+                    _LOGGER.debug(
+                        "download_images[%d]: JSON payload keys=%s image_url=%s",
+                        idx,
+                        list(payload.keys()) if isinstance(payload, dict) else None,
+                        (image_url or "")[:120],
+                    )
+                    if image_url:
+                        img_r = requests.get(image_url, timeout=DEFAULT_TIMEOUT)
+                        _LOGGER.debug(
+                            "download_images[%d]: followed URL → status=%s "
+                            "length=%d",
+                            idx,
+                            img_r.status_code,
+                            len(img_r.content),
+                        )
+                        result.append(img_r.content)
+                        continue
+                except Exception as err:
+                    _LOGGER.warning(
+                        "download_images[%d]: failed to parse JSON: %s",
+                        idx,
+                        err,
+                    )
             result.append(r.content)
         self.downloaded_images = result
+        _LOGGER.debug(
+            "download_images: stored %d images, sizes=%s",
+            len(result),
+            [len(i) if i else 0 for i in result],
+        )
 
     def get_all_device_status(self):
         """Get all of the devices in the account."""
