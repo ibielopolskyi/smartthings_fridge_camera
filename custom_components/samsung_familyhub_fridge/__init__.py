@@ -1,12 +1,16 @@
 """The Samsung FamilyHub Fridge integration."""
 from __future__ import annotations
 
+import logging
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 
 from .api import FamilyHub
 from .const import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.CAMERA, Platform.SENSOR]
 
@@ -25,6 +29,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    async def _handle_refresh(call: ServiceCall) -> None:
+        """Manually trigger a fridge camera refresh."""
+        _LOGGER.info("Manual refresh requested — sending update_camera command")
+        await hass.async_add_executor_job(hub.update_camera)
+        # Also flag the coordinator to pick up new images on next poll
+        hub.should_update = False  # already sent the command
+        _LOGGER.info("Manual refresh command sent successfully")
+
+    hass.services.async_register(DOMAIN, "refresh", _handle_refresh)
+
     return True
 
 
@@ -38,5 +52,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
+        hass.services.async_remove(DOMAIN, "refresh")
 
     return unload_ok
