@@ -344,42 +344,39 @@ class FamilyHub:
                 break
 
     def update_camera(self):
-        """Send a refresh command to the fridge camera.
+        """Send the reverse-engineered refresh command to the fridge.
 
-        Sends a single 'execute' command with argument list targeting all
-        three view slots (vs/0, vs/1, vs/2) to force the fridge to
-        capture fresh photos for each camera.
+        Uses the single OCF resource at /udo/contents/provider/vs/0 which
+        contains all three camera images. Throttled by the coordinator via
+        contactSensor door-close events.
         """
         if not self.device_id:
             return
-        # Send three refresh commands — one per view slot — in a single
-        # batch so the fridge captures fresh photos for all three cameras.
-        commands = [
-            {
-                "component": "main",
-                "capability": "execute",
-                "command": "execute",
-                "arguments": [
-                    f"/udo/contents/provider/vs/{slot}",
-                    {
-                        "x.com.samsung.da.control": {
-                            "x.com.samsung.da.command": "refresh"
-                        }
-                    },
-                ],
-            }
-            for slot in (0, 1, 2)
-        ]
         r = requests.post(
             f"https://api.smartthings.com/v1/devices/{self.device_id}/commands",
             headers=self._headers,
-            json={"commands": commands},
+            json={
+                "commands": [
+                    {
+                        "component": "main",
+                        "capability": "execute",
+                        "command": "execute",
+                        "arguments": [
+                            "/udo/contents/provider/vs/0",
+                            {
+                                "x.com.samsung.da.control": {
+                                    "x.com.samsung.da.command": "refresh"
+                                }
+                            },
+                        ],
+                    }
+                ]
+            },
             timeout=DEFAULT_TIMEOUT,
         )
         self._check_response(r)
         _LOGGER.debug(
-            "update_camera: sent %d refresh commands, status=%s body=%s",
-            len(commands),
+            "update_camera: status=%s body=%s",
             r.status_code,
             r.text[:300],
         )
