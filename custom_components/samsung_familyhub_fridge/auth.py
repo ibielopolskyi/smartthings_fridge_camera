@@ -258,7 +258,7 @@ class SamsungAccountAuth:
             "phoneNumberText": "",
             "deviceName": "HomeAssistant",
             "client_id": self.client_id,
-            "deviceTypeCode": "PHONE+DEVICE",
+            "deviceTypeCode": "PHONE DEVICE",
             "password": self.password,
             "deviceUniqueID": physical_addr,
             "scope": SAMSUNG_SCOPES,
