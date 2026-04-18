@@ -33,6 +33,8 @@ from .const import (
     CONF_AUTH_MODE,
     CONF_DEVICE_ID,
     CONF_LINKED_SMARTTHINGS_ENTRY_ID,
+    CONF_SAMSUNG_IOT_AUTH_SERVER,
+    CONF_SAMSUNG_IOT_REFRESH_TOKEN,
     CONF_TOKEN,
     DOMAIN,
     SMARTTHINGS_DOMAIN,
@@ -121,6 +123,37 @@ async def _build_oauth_hub(
     token = session.token["access_token"]
     hub = FamilyHub(hass, token=token, device_id=device_id)
     hub.attach_oauth_session(session)
+
+    # Attach Samsung IoT token for client.smartthings.com image downloads.
+    # This is a separate token from the SmartThings API OAuth — it carries
+    # Samsung Account identity which the udo/file_links endpoint requires.
+    iot_refresh = entry.data.get(CONF_SAMSUNG_IOT_REFRESH_TOKEN)
+    iot_server = entry.data.get(
+        CONF_SAMSUNG_IOT_AUTH_SERVER, "https://us-auth2.samsungosp.com"
+    )
+    if iot_refresh:
+        try:
+            from .auth import refresh_samsung_iot_token
+
+            iot_creds = await hass.async_add_executor_job(
+                refresh_samsung_iot_token, iot_refresh, iot_server
+            )
+            hub.set_samsung_iot_token(iot_creds.access_token)
+            # Persist the new refresh token for next startup
+            if iot_creds.refresh_token != iot_refresh:
+                new_data = {
+                    **entry.data,
+                    CONF_SAMSUNG_IOT_REFRESH_TOKEN: iot_creds.refresh_token,
+                }
+                hass.config_entries.async_update_entry(entry, data=new_data)
+            _LOGGER.info("Samsung IoT token refreshed for image downloads")
+        except Exception as err:  # pylint: disable=broad-except
+            _LOGGER.warning(
+                "Could not refresh Samsung IoT token — image downloads "
+                "will fail until resolved: %s",
+                err,
+            )
+
     return hub
 
 
