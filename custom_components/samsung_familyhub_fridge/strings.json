@@ -2,9 +2,27 @@
   "config": {
     "step": {
       "user": {
+        "title": "Choose authentication method",
+        "description": "Samsung deprecated indefinite SmartThings Personal Access Tokens on 2024-12-30 — new PATs expire every 24 hours. Reusing the HA core SmartThings integration's OAuth2 credentials avoids this limit entirely.",
+        "menu_options": {
+          "oauth": "Reuse HA core SmartThings OAuth (recommended)",
+          "pat": "Enter a Personal Access Token (legacy)"
+        }
+      },
+      "oauth": {
+        "title": "Reuse SmartThings OAuth credentials",
+        "description": "Select an existing HA core SmartThings integration to borrow its OAuth2 credentials. Tokens will refresh automatically.",
+        "data": {
+          "linked_smartthings_entry_id": "SmartThings integration",
+          "device_id": "Device ID (optional)"
+        }
+      },
+      "pat": {
+        "title": "SmartThings Personal Access Token",
+        "description": "Tokens created after 2024-12-30 expire every 24 hours. You will need to reauthenticate after each expiry.",
         "data": {
           "token": "SmartThings Token",
-          "device_id": "Device ID"
+          "device_id": "Device ID (optional)"
         }
       },
       "reauth_confirm": {
