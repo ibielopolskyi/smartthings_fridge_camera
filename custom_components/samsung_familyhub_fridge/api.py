@@ -220,7 +220,7 @@ class FamilyHub:
                     )
                 req_headers = {**self._headers}
                 if self._oauth_session is not None:
-                    req_headers["Accept"] = "*/*"
+                    req_headers["Accept"] = "application/octet-stream, image/jpeg, image/*, */*"
                 r = requests.get(
                     url,
                     headers=req_headers,
