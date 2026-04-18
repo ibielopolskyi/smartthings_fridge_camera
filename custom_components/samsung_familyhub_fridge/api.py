@@ -218,9 +218,12 @@ class FamilyHub:
                         f"https://client.smartthings.com/udo/file_links/"
                         f"{file_id}?cid={CID}&di={self.device_id}"
                     )
+                req_headers = {**self._headers}
+                if self._oauth_session is not None:
+                    req_headers["Accept"] = "*/*"
                 r = requests.get(
                     url,
-                    headers=self._headers,
+                    headers=req_headers,
                     timeout=DEFAULT_TIMEOUT,
                 )
                 self._check_response(r)
