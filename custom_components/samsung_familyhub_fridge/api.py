@@ -206,10 +206,18 @@ class FamilyHub:
         successes = 0
         for idx, file_id in enumerate(file_ids):
             try:
-                url = (
-                    f"https://client.smartthings.com/udo/file_links/{file_id}"
-                    f"?cid={CID}&di={self.device_id}"
-                )
+                # OAuth tokens work with the public API; PATs (Samsung-ID-
+                # bearing) work with the internal client endpoint.
+                if self._oauth_session is not None:
+                    url = (
+                        f"https://api.smartthings.com/v1/devices/"
+                        f"{self.device_id}/files/{file_id}"
+                    )
+                else:
+                    url = (
+                        f"https://client.smartthings.com/udo/file_links/"
+                        f"{file_id}?cid={CID}&di={self.device_id}"
+                    )
                 r = requests.get(
                     url,
                     headers=self._headers,
@@ -218,10 +226,11 @@ class FamilyHub:
                 self._check_response(r)
                 content_type = r.headers.get("content-type", "")
                 _LOGGER.debug(
-                    "download_images[%d]: file_id=%s status=%s "
+                    "download_images[%d]: file_id=%s url=%s status=%s "
                     "content_type=%s length=%d",
                     idx,
                     file_id[:8],
+                    url.split("?")[0][-40:],
                     r.status_code,
                     content_type,
                     len(r.content),
