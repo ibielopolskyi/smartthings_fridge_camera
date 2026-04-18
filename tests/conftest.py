@@ -269,9 +269,14 @@ ha_const = _make_module(
     Platform=_Platform,
     HTTP_DIGEST_AUTHENTICATION="digest",
 )
+class _ConfigEntryNotReady(Exception):
+    """Stub: HA raises this to defer entry setup."""
+
+
 ha_exceptions = _make_module(
     "homeassistant.exceptions",
     ConfigEntryAuthFailed=_ConfigEntryAuthFailed,
+    ConfigEntryNotReady=_ConfigEntryNotReady,
     HomeAssistantError=_HomeAssistantError,
 )
 ha_data_entry_flow = _make_module(
@@ -299,6 +304,44 @@ ha_helpers_typing = _make_module(
     "homeassistant.helpers.typing",
     ConfigType=dict,
     DiscoveryInfoType=dict,
+)
+
+
+class _OAuth2SessionStub:
+    """Minimal OAuth2Session used by tests.
+
+    Tracks a single `token` dict and a counter of refresh calls so tests
+    can assert the integration calls `async_ensure_token_valid()` before
+    each API hit.
+    """
+
+    def __init__(self, hass, entry, impl) -> None:
+        self.hass = hass
+        self.config_entry = entry
+        self.implementation = impl
+        self.token = {"access_token": "oauth-token-initial"}
+        self.ensure_calls = 0
+        self._next_refresh_value = None
+
+    async def async_ensure_token_valid(self):
+        self.ensure_calls += 1
+        if self._next_refresh_value is not None:
+            self.token = {"access_token": self._next_refresh_value}
+            self._next_refresh_value = None
+
+    def queue_refresh(self, new_access_token: str) -> None:
+        """Arrange for the next `ensure` call to rotate the token."""
+        self._next_refresh_value = new_access_token
+
+
+async def _async_get_config_entry_implementation_stub(hass, entry):
+    return MagicMock()
+
+
+ha_helpers_oauth2 = _make_module(
+    "homeassistant.helpers.config_entry_oauth2_flow",
+    OAuth2Session=_OAuth2SessionStub,
+    async_get_config_entry_implementation=_async_get_config_entry_implementation_stub,
 )
 
 # components tree
@@ -338,6 +381,7 @@ _modules = {
     "homeassistant.helpers.entity_platform": ha_helpers_entity_platform,
     "homeassistant.helpers.dispatcher": ha_helpers_dispatcher,
     "homeassistant.helpers.typing": ha_helpers_typing,
+    "homeassistant.helpers.config_entry_oauth2_flow": ha_helpers_oauth2,
     "homeassistant.components": ha_components,
     "homeassistant.components.camera": ha_components_camera,
     "homeassistant.components.local_file": ha_components_local_file,

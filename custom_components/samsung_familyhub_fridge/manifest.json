@@ -1,12 +1,14 @@
 {
   "domain": "samsung_familyhub_fridge",
   "name": "Samsung FamilyHub Fridge",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "codeowners": [
-    "@ibielopolskyi"
+    "@ibielopolskyi",
+    "@nachtschatt3n"
   ],
   "config_flow": true,
   "dependencies": [],
+  "after_dependencies": ["smartthings"],
   "documentation": "https://github.com/ibielopolskyi/smartthings_fridge_camera",
   "integration_type": "hub",
   "homekit": {},

@@ -2,6 +2,8 @@ from __future__ import annotations
 from datetime import timedelta
 import logging
 import time
+from typing import TYPE_CHECKING
+
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
 )
@@ -11,6 +13,9 @@ import requests
 from homeassistant.core import HomeAssistant
 
 from .const import CID, DEFAULT_TIMEOUT
+
+if TYPE_CHECKING:
+    from homeassistant.helpers import config_entry_oauth2_flow
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,6 +40,9 @@ class DataCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self):
         """Fetch data from API endpoint."""
         try:
+            # OAuth mode: refresh the access token (if close to expiry) BEFORE
+            # any API call. No-op for PAT mode.
+            await self.api.async_ensure_fresh_token()
             if self.api.device_id is None:
                 _LOGGER.debug("No device_id — fetching device list")
                 status = await self._hass.async_add_executor_job(
@@ -83,7 +91,20 @@ class DataCoordinator(DataUpdateCoordinator):
 
 
 class FamilyHub:
-    """SmartThings Family Hub fridge API client."""
+    """SmartThings Family Hub fridge API client.
+
+    Two auth modes:
+
+    1. PAT mode (default): caller provides a raw SmartThings token via
+       `token=`. Token is static; caller is responsible for refresh via
+       `update_token()`.
+
+    2. OAuth mode: after construction, caller attaches an
+       ``OAuth2Session`` via `attach_oauth_session(session)`. Before every
+       API call the coordinator awaits `async_ensure_fresh_token()` which
+       asks HA's OAuth2Session to refresh the access token if it's close
+       to expiry — no manual refresh needed.
+    """
 
     def __init__(self, hass: HomeAssistant, token: str, device_id: str) -> None:
         """Initialize."""
@@ -97,9 +118,34 @@ class FamilyHub:
         self.last_closed = None
         self.should_update = False
         self.downloaded_images = [None, None, None]
+        self._oauth_session: "config_entry_oauth2_flow.OAuth2Session | None" = None
+
+    def attach_oauth_session(
+        self, session: "config_entry_oauth2_flow.OAuth2Session"
+    ) -> None:
+        """Bind an HA OAuth2Session so tokens refresh automatically.
+
+        Once attached, `async_ensure_fresh_token()` consults this session
+        before every API call and updates the bearer header in place.
+        """
+        self._oauth_session = session
+
+    async def async_ensure_fresh_token(self) -> None:
+        """If running in OAuth mode, ensure the bearer token is still valid.
+
+        No-op for PAT mode. Safe to call on every poll — HA's OAuth2Session
+        only performs a network refresh when the access_token is within
+        a few seconds of expiring.
+        """
+        if self._oauth_session is None:
+            return
+        await self._oauth_session.async_ensure_token_valid()
+        new_token = self._oauth_session.token.get("access_token")
+        if new_token and new_token != self.token:
+            self.update_token(new_token)
 
     def update_token(self, token: str) -> None:
-        """Update the API token (used after re-authentication)."""
+        """Update the API token (used after re-authentication or OAuth refresh)."""
         self.token = token
         self._headers = {"Authorization": f"Bearer {self.token}"}
 
