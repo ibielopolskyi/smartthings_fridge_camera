@@ -1,0 +1,7 @@
+refresh:
+  name: Refresh camera
+  description: >
+    Send the refresh command to the Samsung Family Hub fridge to request
+    new camera photos. Photos are captured by the fridge hardware on
+    door-close events; this service sends the same command but actual
+    capture depends on the fridge's current state and firmware.
