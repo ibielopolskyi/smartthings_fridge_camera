@@ -42,10 +42,16 @@ TOKEN_URL = "https://api.smartthings.com/oauth/token"
 # --- Samsung Account endpoints (mobile app API) ---
 SAMSUNG_AUTH_URL = "https://us-auth2.samsungosp.com/auth/oauth2/requestAuthentication"
 SAMSUNG_TOKEN_URL = "https://us-auth2.samsungosp.com/auth/oauth2/authWithTncMandatory"
+SAMSUNG_IOT_AUTHORIZE_URL = "https://us-auth2.samsungosp.com/auth/oauth2/v2/authorize"
+SAMSUNG_IOT_TOKEN_URL = "https://us-auth2.samsungosp.com/auth/oauth2/token"
 
 # Default scopes needed by the fridge camera integration.
 DEFAULT_SCOPES = "r:devices:* w:devices:* x:devices:*"
 SAMSUNG_SCOPES = "iot.client+mcs.client+galaxystore.openapi"
+
+# Samsung Account client IDs (from decompiled SmartThings app)
+SAMSUNG_LOGIN_CLIENT_ID = "yfrtglt53o"
+SAMSUNG_IOT_CLIENT_ID = "6iado3s6jc"
 
 # Default redirect URI — httpbin echoes query params, making it easy to copy
 # the authorization code.  Users may substitute their own.
@@ -223,6 +229,21 @@ class SamsungAccountAuth:
             userauth_token=userauth_token,
         )
 
+    def login_iot(self) -> SamsungIoTCredentials:
+        """Full login → IoT-scoped token (works with client.smartthings.com).
+
+        Three-step flow:
+          1. requestAuthentication → userauth_token
+          2. /v2/authorize          → IoT authorization code
+          3. /token                 → access_token + refresh_token
+        """
+        userauth_token = self._request_authentication()
+        return get_samsung_iot_token(
+            userauth_token=userauth_token,
+            login_id=self.email,
+            auth_server_url="https://us-auth2.samsungosp.com",
+        )
+
     def _request_authentication(self) -> str:
         """Step 1: Submit email + password to get a userauth_token."""
         physical_addr = f"IMEI%3A{self._device_id}"
@@ -323,3 +344,137 @@ class SamsungAccountAuth:
 
 class AuthError(Exception):
     """Raised when Samsung Account authentication fails."""
+
+
+# ======================================================================
+# Samsung Account IoT token (for client.smartthings.com)
+# ======================================================================
+
+
+@dataclass
+class SamsungIoTCredentials:
+    """Samsung Account IoT-scoped token pair — works with client.smartthings.com."""
+
+    access_token: str
+    refresh_token: str
+    auth_server_url: str = "https://us-auth2.samsungosp.com"
+
+
+def get_samsung_iot_token(
+    userauth_token: str,
+    login_id: str = "",
+    auth_server_url: str = "https://us-auth2.samsungosp.com",
+) -> SamsungIoTCredentials:
+    """Exchange a Samsung Account ``userauth_token`` for an IoT-scoped token.
+
+    The resulting token carries Samsung Account identity and works with
+    ``client.smartthings.com`` endpoints (unlike SmartThings API OAuth
+    tokens which return "No samsung id available").
+
+    Flow (from decompiled SmartThings Android app):
+      1. GET  /auth/oauth2/v2/authorize  → authorization code
+      2. POST /auth/oauth2/token         → access_token + refresh_token
+    """
+    verifier, challenge = _generate_pkce_pair()
+    device_id = base64.urlsafe_b64encode(os.urandom(8)).rstrip(b"=").decode()
+
+    # Step 1: Get authorization code for IoT scope
+    params = {
+        "response_type": "code",
+        "client_id": SAMSUNG_IOT_CLIENT_ID,
+        "scope": "iot.client",
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        "userauth_token": userauth_token,
+        "serviceType": "M",
+        "childAccountSupported": "Y",
+        "physical_address_text": device_id,
+    }
+    if login_id:
+        params["login_id"] = login_id
+
+    resp = requests.get(
+        f"{auth_server_url}/auth/oauth2/v2/authorize",
+        params=params,
+        allow_redirects=False,
+        timeout=30,
+    )
+    if resp.status_code not in (200, 302):
+        raise AuthError(
+            f"IoT authorize failed: HTTP {resp.status_code} {resp.text[:200]}"
+        )
+
+    # The code might be in the response body (JSON) or in a redirect Location
+    auth_code = None
+    if resp.status_code == 302:
+        loc = resp.headers.get("Location", "")
+        codes = parse_qs(urlparse(loc).query).get("code", [])
+        if codes:
+            auth_code = codes[0]
+    if not auth_code:
+        body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+        auth_code = body.get("code") or body.get("auth_code")
+    if not auth_code:
+        raise AuthError(
+            f"IoT authorize did not return a code: {resp.text[:300]}"
+        )
+
+    _LOGGER.debug("Got IoT authorization code")
+
+    # Step 2: Exchange code for access + refresh tokens
+    data = {
+        "grant_type": "authorization_code",
+        "client_id": SAMSUNG_IOT_CLIENT_ID,
+        "code": auth_code,
+        "code_verifier": verifier,
+        "physical_address_text": device_id,
+    }
+    resp = requests.post(
+        f"{auth_server_url}/auth/oauth2/token",
+        data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        raise AuthError(
+            f"IoT token exchange failed: HTTP {resp.status_code} {resp.text[:200]}"
+        )
+    body = resp.json()
+    access = body.get("access_token")
+    refresh = body.get("refresh_token")
+    if not access or not refresh:
+        raise AuthError(f"IoT token response missing tokens: {body}")
+
+    _LOGGER.info("Samsung IoT token obtained successfully")
+    return SamsungIoTCredentials(
+        access_token=access,
+        refresh_token=refresh,
+        auth_server_url=auth_server_url,
+    )
+
+
+def refresh_samsung_iot_token(
+    refresh_token: str,
+    auth_server_url: str = "https://us-auth2.samsungosp.com",
+) -> SamsungIoTCredentials:
+    """Refresh a Samsung IoT token. Returns new access + refresh tokens."""
+    data = {
+        "grant_type": "refresh_token",
+        "client_id": SAMSUNG_IOT_CLIENT_ID,
+        "refresh_token": refresh_token,
+    }
+    resp = requests.post(
+        f"{auth_server_url}/auth/oauth2/token",
+        data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
+        timeout=30,
+    )
+    if resp.status_code == 401:
+        raise AuthError("Samsung IoT refresh token expired — re-login required")
+    resp.raise_for_status()
+    body = resp.json()
+    return SamsungIoTCredentials(
+        access_token=body["access_token"],
+        refresh_token=body.get("refresh_token", refresh_token),
+        auth_server_url=auth_server_url,
+    )

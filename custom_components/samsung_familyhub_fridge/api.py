@@ -119,6 +119,22 @@ class FamilyHub:
         self.should_update = False
         self.downloaded_images = [None, None, None]
         self._oauth_session: "config_entry_oauth2_flow.OAuth2Session | None" = None
+        # Samsung IoT token for client.smartthings.com image downloads.
+        # Only set in OAuth mode; PAT tokens already carry Samsung ID.
+        self._samsung_iot_token: str | None = None
+        self._samsung_iot_headers: dict | None = None
+
+    def set_samsung_iot_token(self, token: str) -> None:
+        """Set a Samsung IoT token for client.smartthings.com image downloads.
+
+        This token carries Samsung Account identity and is needed because
+        the udo/file_links endpoint rejects standard SmartThings OAuth tokens.
+        """
+        self._samsung_iot_token = token
+        self._samsung_iot_headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.smartthings+json;v=1",
+        }
 
     def attach_oauth_session(
         self, session: "config_entry_oauth2_flow.OAuth2Session"
@@ -206,24 +222,20 @@ class FamilyHub:
         successes = 0
         for idx, file_id in enumerate(file_ids):
             try:
-                # OAuth tokens work with the public API; PATs (Samsung-ID-
-                # bearing) work with the internal client endpoint.
-                if self._oauth_session is not None:
-                    url = (
-                        f"https://api.smartthings.com/v1/devices/"
-                        f"{self.device_id}/files/{file_id}"
-                    )
-                else:
-                    url = (
-                        f"https://client.smartthings.com/udo/file_links/"
-                        f"{file_id}?cid={CID}&di={self.device_id}"
-                    )
-                req_headers = {**self._headers}
-                if self._oauth_session is not None:
-                    req_headers["Accept"] = "application/octet-stream, image/jpeg, image/*, */*"
+                url = (
+                    f"https://client.smartthings.com/udo/file_links/"
+                    f"{file_id}?cid={CID}&di={self.device_id}"
+                )
+                # Use Samsung IoT token if available (OAuth mode);
+                # otherwise use the main token (PAT mode).
+                dl_headers = (
+                    self._samsung_iot_headers
+                    if self._samsung_iot_headers
+                    else self._headers
+                )
                 r = requests.get(
                     url,
-                    headers=req_headers,
+                    headers=dl_headers,
                     timeout=DEFAULT_TIMEOUT,
                 )
                 self._check_response(r)
