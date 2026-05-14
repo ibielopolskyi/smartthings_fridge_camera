@@ -3,18 +3,28 @@
     "step": {
       "user": {
         "title": "Choose authentication method",
-        "description": "Samsung deprecated indefinite SmartThings Personal Access Tokens on 2024-12-30 — new PATs expire every 24 hours. Reusing the HA core SmartThings integration's OAuth2 credentials avoids this limit entirely.",
+        "description": "Family Hub images require Samsung account identity. Home Assistant SmartThings OAuth reuse may fail with 'No samsung id available'. Use Samsung client bearer token mode for the image endpoint, or legacy PAT if it still works for you.",
         "menu_options": {
-          "oauth": "Reuse HA core SmartThings OAuth (recommended)",
+          "samsung_client_bearer": "Samsung client bearer token for Family Hub image endpoint",
+          "oauth": "Reuse HA core SmartThings OAuth",
           "pat": "Enter a Personal Access Token (legacy)"
         }
       },
       "oauth": {
         "title": "Reuse SmartThings OAuth credentials",
-        "description": "Select an existing HA core SmartThings integration to borrow its OAuth2 credentials. Tokens will refresh automatically.",
+        "description": "Select an existing HA core SmartThings integration to borrow its OAuth2 credentials. Tokens refresh automatically, but this token may not work for Family Hub images if Samsung account ID is unavailable.",
         "data": {
           "linked_smartthings_entry_id": "SmartThings integration",
           "device_id": "Device ID (optional)"
+        }
+      },
+      "samsung_client_bearer": {
+        "title": "Samsung client bearer token",
+        "description": "Enter a Samsung/SmartThings mobile-client bearer token, Device ID, and CID for the Family Hub image endpoint. The token may be pasted raw or prefixed with Bearer.",
+        "data": {
+          "token": "Bearer token",
+          "device_id": "Device ID",
+          "cid": "CID"
         }
       },
       "pat": {
@@ -31,11 +41,21 @@
         "data": {
           "token": "New SmartThings Token"
         }
+      },
+      "reauth_samsung_client_bearer": {
+        "title": "Update Samsung client bearer token",
+        "description": "Update the Samsung client bearer token, Device ID, and CID used for Family Hub image downloads.",
+        "data": {
+          "token": "New bearer token",
+          "device_id": "Device ID",
+          "cid": "CID"
+        }
       }
     },
     "error": {
       "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
       "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
+      "samsung_id_unavailable": "This token does not include the Samsung account ID required by the Family Hub image endpoint. Switch to Samsung client bearer token mode or legacy PAT mode.",
       "unknown": "[%key:common::config_flow::error::unknown%]"
     },
     "abort": {

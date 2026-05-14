@@ -11,6 +11,9 @@ Auth modes (data["auth_mode"]):
              deprecated indefinite PATs on 2024-12-30 — new PATs expire after
              24 hours. Retained for backwards compatibility only.
 
+- "samsung_client_bearer": Samsung/SmartThings mobile-client bearer token used
+             for the Family Hub image endpoints on client.smartthings.com.
+
 Config entries created before this integration version stored `{token, device_id}`
 without an `auth_mode` key; they are migrated to `auth_mode: "pat"` on first
 load via `async_migrate_entry`.
@@ -26,11 +29,13 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_entry_oauth2_flow
 
-from .api import FamilyHub
+from .api import FamilyHub, normalize_bearer_token, redact_token
 from .const import (
     AUTH_MODE_OAUTH,
     AUTH_MODE_PAT,
+    AUTH_MODE_SAMSUNG_CLIENT_BEARER,
     CONF_AUTH_MODE,
+    CONF_CID,
     CONF_DEVICE_ID,
     CONF_LINKED_SMARTTHINGS_ENTRY_ID,
     CONF_SAMSUNG_IOT_AUTH_SERVER,
@@ -54,6 +59,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if auth_mode == AUTH_MODE_OAUTH:
         hub = await _build_oauth_hub(hass, entry, device_id)
+    elif auth_mode == AUTH_MODE_SAMSUNG_CLIENT_BEARER:
+        token = entry.data.get(CONF_TOKEN)
+        cid = entry.data.get(CONF_CID)
+        if not token or not cid or not device_id:
+            raise ConfigEntryNotReady(
+                "Samsung client bearer mode requires token, cid, and device_id. "
+                "Reconfigure the integration in Settings → Devices & Services."
+            )
+        hub = FamilyHub(
+            hass,
+            token=normalize_bearer_token(token),
+            device_id=device_id,
+            auth_mode=AUTH_MODE_SAMSUNG_CLIENT_BEARER,
+            cid=cid,
+        )
+        _LOGGER.debug(
+            "Configured Samsung client bearer token for Family Hub images: %s",
+            redact_token(token),
+        )
     else:
         # Legacy PAT path — unchanged from v0.0.x.
         token = entry.data.get(CONF_TOKEN)
@@ -62,7 +86,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "PAT-mode config entry has no token. Reconfigure the "
                 "integration in Settings → Devices & Services."
             )
-        hub = FamilyHub(hass, token=token, device_id=device_id)
+        hub = FamilyHub(hass, token=token, device_id=device_id, auth_mode=AUTH_MODE_PAT)
 
     hass.data[DOMAIN][entry.entry_id] = entry
     hass.data[DOMAIN]["hub"] = hub
@@ -73,10 +97,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def _handle_refresh(call: ServiceCall) -> None:
         """Manually trigger a fridge camera refresh."""
-        _LOGGER.info("Manual refresh requested — sending update_camera command")
+        _LOGGER.info("Manual refresh requested")
         await hub.async_ensure_fresh_token()
+        if hub.auth_mode == AUTH_MODE_SAMSUNG_CLIENT_BEARER:
+            await hass.async_add_executor_job(hub.download_images)
+            _LOGGER.info("Manual image download completed")
+            return
         await hass.async_add_executor_job(hub.update_camera)
-        hub.should_update = False  # already sent the command
+        hub.should_update = False
         _LOGGER.info("Manual refresh command sent successfully")
 
     hass.services.async_register(DOMAIN, "refresh", _handle_refresh)
@@ -161,10 +189,13 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
     """Handle config entry updates (e.g. after re-authentication)."""
     hub: FamilyHub = hass.data[DOMAIN]["hub"]
     auth_mode = entry.data.get(CONF_AUTH_MODE, AUTH_MODE_PAT)
-    if auth_mode == AUTH_MODE_PAT:
+    if auth_mode in (AUTH_MODE_PAT, AUTH_MODE_SAMSUNG_CLIENT_BEARER):
         new_token = entry.data.get(CONF_TOKEN)
         if new_token:
             hub.update_token(new_token)
+        if auth_mode == AUTH_MODE_SAMSUNG_CLIENT_BEARER:
+            hub.cid = entry.data.get(CONF_CID, hub.cid)
+            hub._device_id = entry.data.get(CONF_DEVICE_ID, hub._device_id)
     # OAuth mode refreshes its token automatically — nothing to do here.
 
 

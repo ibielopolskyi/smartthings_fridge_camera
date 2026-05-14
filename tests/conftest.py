@@ -181,6 +181,7 @@ class _HomeAssistant:
     def __init__(self):
         self.async_add_executor_job = AsyncMock(side_effect=self._run_sync)
         self.services = _ServiceRegistry()
+        self.config_entries = _ConfigEntriesManager()
 
     async def _run_sync(self, func, *args):
         return func(*args)
@@ -189,9 +190,12 @@ class _HomeAssistant:
 class _ConfigEntry:
     """Minimal stub of homeassistant.config_entries.ConfigEntry."""
 
-    def __init__(self, entry_id="test", data=None):
+    def __init__(self, entry_id="test", data=None, domain="samsung_familyhub_fridge", title=""):
         self.entry_id = entry_id
         self.data = data or {}
+        self.domain = domain
+        self.title = title
+        self.source = "user"
         self._update_listeners = []
 
     def add_update_listener(self, listener):
@@ -208,6 +212,56 @@ class _ConfigEntryAuthFailed(Exception):
 
 class _HomeAssistantError(Exception):
     pass
+
+
+class _ConfigEntriesManager:
+    def __init__(self):
+        self._entries = []
+        self.updated_entries = []
+
+    def async_entries(self, domain=None):
+        if domain is None:
+            return list(self._entries)
+        return [entry for entry in self._entries if entry.domain == domain]
+
+    def async_get_entry(self, entry_id):
+        for entry in self._entries:
+            if entry.entry_id == entry_id:
+                return entry
+        return None
+
+    def async_update_entry(self, entry, data=None, **kwargs):
+        if data is not None:
+            entry.data = data
+        self.updated_entries.append((entry, data, kwargs))
+
+    async def async_forward_entry_setups(self, entry, platforms):
+        return True
+
+    async def async_unload_platforms(self, entry, platforms):
+        return True
+
+
+class _FlowBase:
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__()
+
+    def async_show_menu(self, **kwargs):
+        return {"type": "menu", **kwargs}
+
+    def async_show_form(self, **kwargs):
+        return {"type": "form", **kwargs}
+
+    def async_create_entry(self, **kwargs):
+        return {"type": "create_entry", **kwargs}
+
+    def async_update_reload_and_abort(self, entry, data=None, **kwargs):
+        if data is not None:
+            entry.data = data
+        return {"type": "abort", "reason": "reauth_successful", **kwargs}
+
+    def _get_reauth_entry(self):
+        return self._reauth_entry
 
 
 class _DataUpdateCoordinator:
@@ -262,7 +316,9 @@ ha_core = _make_module(
 ha_config_entries = _make_module(
     "homeassistant.config_entries",
     ConfigEntry=_ConfigEntry,
-    ConfigFlow=MagicMock,
+    ConfigFlow=_FlowBase,
+    OptionsFlow=_FlowBase,
+    SOURCE_IGNORE="ignore",
 )
 ha_const = _make_module(
     "homeassistant.const",
@@ -401,4 +457,5 @@ except ImportError:
     vol.Schema = lambda *a, **kw: MagicMock()
     vol.Required = lambda *a, **kw: a[0] if a else "required"
     vol.Optional = lambda *a, **kw: a[0] if a else "optional"
+    vol.In = lambda value: value
     sys.modules["voluptuous"] = vol

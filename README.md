@@ -112,9 +112,35 @@ Search for the FamilyHub Integration you just downloaded and select it:
 </p>
 
 
-You need to enter your Smartthings Token and your Device ID. The token is used to access your SmartThings account. The device ID identifies your fridge.</br>
-You can create a token from here: https://account.smartthings.com/tokens.</br>
-And get your device ID from here: https://my.smartthings.com/advanced/devices.</br>
+## Authentication options
+
+Family Hub camera images are fetched through Samsung's `client.smartthings.com` image endpoints. Home Assistant's built-in SmartThings OAuth token can still work for normal SmartThings API calls, but it may not include the Samsung account identity required by the Family Hub image endpoint. When that happens, Samsung returns:
+
+```text
+No samsung id available
+```
+
+Recommended setup paths:
+
+- **Samsung client bearer token for Family Hub image endpoint**: use this when OAuth reuse fails for images. You must provide your fridge `device_id`, the `cid`, and a valid Samsung/SmartThings client bearer token. The token field accepts either the raw token or a value beginning with `Bearer `.
+- **Legacy SmartThings Personal Access Token**: use this if you still have a PAT that works for your account and device. New PATs may expire quickly.
+- **Reuse HA core SmartThings OAuth**: useful for normal SmartThings OAuth reuse, but it may not work for Family Hub camera images if Samsung reports that no Samsung ID is available.
+
+The Samsung client bearer token mode requires:
+
+- `device_id`: the SmartThings device ID for your fridge.
+- `cid`: the client ID value required by the Samsung Family Hub image file-link endpoint.
+- `token`: your valid Samsung client bearer token.
+
+Do not share bearer tokens or PATs publicly. Treat them like passwords.
+
+The camera `fileId` rotates roughly every 10 minutes. The integration re-fetches the fridge device JSON before each image download and does not permanently cache `fileId` values. Token lifetime for Samsung client bearer tokens is not known; if images stop refreshing and Home Assistant asks for reauthentication, update the token, `cid`, or `device_id` from the integration options/reauth flow instead of deleting the integration.
+
+This project does not include instructions for bypassing certificate pinning, scraping browser cookies, or extracting private app traffic. You need to supply your own valid Samsung client bearer token and `cid`.
+
+You need to enter your authentication details and your Device ID. The token is used to access your SmartThings/Samsung account. The device ID identifies your fridge.</br>
+For legacy PAT mode, you can create a token from here: https://account.smartthings.com/tokens.</br>
+You can get your device ID from here: https://my.smartthings.com/advanced/devices.</br>
 Click "Submit" to finish the setup:
 <p float="left">
   <img src="assets/config/config-step-4.png" width=1200  alt="config-step-4"/>

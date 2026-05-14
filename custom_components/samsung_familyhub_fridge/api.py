@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import timedelta
 import logging
 import time
+from urllib.parse import urlparse
 from typing import TYPE_CHECKING
 
 from homeassistant.helpers.update_coordinator import (
@@ -12,7 +13,14 @@ import requests
 
 from homeassistant.core import HomeAssistant
 
-from .const import CID, DEFAULT_TIMEOUT
+from .const import (
+    AUTH_MODE_PAT,
+    AUTH_MODE_SAMSUNG_CLIENT_BEARER,
+    CID,
+    CLIENT_SMARTTHINGS_ACCEPT,
+    CLIENT_SMARTTHINGS_USER_AGENT,
+    DEFAULT_TIMEOUT,
+)
 
 if TYPE_CHECKING:
     from homeassistant.helpers import config_entry_oauth2_flow
@@ -22,6 +30,32 @@ _LOGGER = logging.getLogger(__name__)
 
 class AuthenticationError(Exception):
     """Raised when SmartThings API returns an authentication error (401/403)."""
+
+
+class SamsungIdUnavailableError(AuthenticationError):
+    """Raised when a token lacks the Samsung account identity required for images."""
+
+
+class ImageDownloadError(Exception):
+    """Raised when the fridge camera image cannot be downloaded."""
+
+
+def normalize_bearer_token(value: str) -> str:
+    """Return a raw bearer token, accepting either raw token or 'Bearer ...'."""
+    value = (value or "").strip()
+    if value.lower().startswith("bearer "):
+        return value[7:].strip()
+    return value
+
+
+def redact_token(value: str | None) -> str:
+    """Redact a token for logs, preserving only a short prefix and suffix."""
+    if not value:
+        return "<empty>"
+    token = normalize_bearer_token(value)
+    if len(token) <= 8:
+        return "<redacted>"
+    return f"{token[:4]}...{token[-4:]}"
 
 
 class DataCoordinator(DataUpdateCoordinator):
@@ -43,6 +77,14 @@ class DataCoordinator(DataUpdateCoordinator):
             # OAuth mode: refresh the access token (if close to expiry) BEFORE
             # any API call. No-op for PAT mode.
             await self.api.async_ensure_fresh_token()
+            if self.api.auth_mode == AUTH_MODE_SAMSUNG_CLIENT_BEARER:
+                success = await self._hass.async_add_executor_job(
+                    self.api.download_images
+                )
+                if success:
+                    self.last_updated_at = time.time()
+                    self.last_file_ids = self.api.get_file_ids()
+                return
             if self.api.device_id is None:
                 _LOGGER.debug("No device_id — fetching device list")
                 status = await self._hass.async_add_executor_job(
@@ -83,6 +125,18 @@ class DataCoordinator(DataUpdateCoordinator):
                     self.api.should_update,
                     self.api.get_file_ids(),
                 )
+        except SamsungIdUnavailableError as err:
+            _LOGGER.warning(
+                "The Home Assistant SmartThings OAuth token does not appear "
+                "valid for the Samsung Family Hub image endpoint because it "
+                "has no Samsung account ID. Reconfigure this integration and "
+                "switch to Samsung client bearer token mode or legacy PAT mode."
+            )
+            raise ConfigEntryAuthFailed(
+                "SmartThings OAuth token cannot access Samsung Family Hub "
+                "images. Reconfigure the integration and choose Samsung "
+                "client bearer token mode or legacy PAT mode."
+            ) from err
         except AuthenticationError as err:
             raise ConfigEntryAuthFailed(
                 "SmartThings token expired or is invalid. "
@@ -93,7 +147,7 @@ class DataCoordinator(DataUpdateCoordinator):
 class FamilyHub:
     """SmartThings Family Hub fridge API client.
 
-    Two auth modes:
+    Auth modes:
 
     1. PAT mode (default): caller provides a raw SmartThings token via
        `token=`. Token is static; caller is responsible for refresh via
@@ -104,13 +158,26 @@ class FamilyHub:
        API call the coordinator awaits `async_ensure_fresh_token()` which
        asks HA's OAuth2Session to refresh the access token if it's close
        to expiry — no manual refresh needed.
+
+    3. Samsung client bearer mode: caller provides a Samsung/SmartThings
+       mobile-client bearer token plus CID for Family Hub image endpoints.
     """
 
-    def __init__(self, hass: HomeAssistant, token: str, device_id: str) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        token: str,
+        device_id: str,
+        *,
+        auth_mode: str = AUTH_MODE_PAT,
+        cid: str | None = None,
+    ) -> None:
         """Initialize."""
         self._device_id = device_id
         self._hass = hass
-        self.token = token
+        self.auth_mode = auth_mode
+        self.cid = cid or CID
+        self.token = normalize_bearer_token(token)
         self._headers = {"Authorization": f"Bearer {self.token}"}
         self.images = []
         self._device_status = None
@@ -130,10 +197,11 @@ class FamilyHub:
         This token carries Samsung Account identity and is needed because
         the udo/file_links endpoint rejects standard SmartThings OAuth tokens.
         """
-        self._samsung_iot_token = token
+        self._samsung_iot_token = normalize_bearer_token(token)
         self._samsung_iot_headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.smartthings+json;v=1",
+            "Authorization": f"Bearer {self._samsung_iot_token}",
+            "Accept": CLIENT_SMARTTHINGS_ACCEPT,
+            "User-Agent": CLIENT_SMARTTHINGS_USER_AGENT,
         }
 
     def attach_oauth_session(
@@ -162,7 +230,7 @@ class FamilyHub:
 
     def update_token(self, token: str) -> None:
         """Update the API token (used after re-authentication or OAuth refresh)."""
-        self.token = token
+        self.token = normalize_bearer_token(token)
         self._headers = {"Authorization": f"Bearer {self.token}"}
 
     @property
@@ -184,12 +252,48 @@ class FamilyHub:
                 f"SmartThings API returned HTTP {response.status_code}. "
                 "Token is expired or invalid."
             )
+        if self._is_samsung_id_unavailable(response):
+            raise SamsungIdUnavailableError(
+                "Token does not include a Samsung account ID required by "
+                "client.smartthings.com."
+            )
         if not response.ok:
             _LOGGER.warning(
                 "SmartThings API request failed: HTTP %s - %s",
                 response.status_code,
-                response.text[:200],
+                self._redact_text(response.text[:200]),
             )
+
+    def _is_samsung_id_unavailable(self, response: requests.Response) -> bool:
+        """Return true for the client.smartthings.com Samsung-ID failure."""
+        if response.status_code != 400:
+            return False
+        try:
+            error = response.json().get("error", {})
+        except ValueError:
+            return False
+        return (
+            error.get("code") == "BadRequestError"
+            and error.get("message") == "No samsung id available"
+        )
+
+    def _redact_text(self, text: str) -> str:
+        """Redact known token values from text before logging."""
+        for token in (self.token, self._samsung_iot_token):
+            if token:
+                text = text.replace(token, redact_token(token))
+                text = text.replace(f"Bearer {token}", f"Bearer {redact_token(token)}")
+        return text
+
+    @property
+    def _client_headers(self) -> dict[str, str]:
+        """Headers for client.smartthings.com mobile-client endpoints."""
+        token = self._samsung_iot_token or self.token
+        return {
+            "Accept": CLIENT_SMARTTHINGS_ACCEPT,
+            "User-Agent": CLIENT_SMARTTHINGS_USER_AGENT,
+            "Authorization": f"Bearer {token}",
+        }
 
     async def authenticate(self) -> bool:
         """Test if we can authenticate with the host."""
@@ -209,6 +313,8 @@ class FamilyHub:
         Failed individual downloads preserve the previously-known image,
         so a transient network error on one image doesn't wipe the others.
         """
+        if self.auth_mode == AUTH_MODE_SAMSUNG_CLIENT_BEARER:
+            self.set_current_device_status(self.get_samsung_client_device_status())
         if not self._current_device_status or not self.device_id:
             return False
 
@@ -224,21 +330,10 @@ class FamilyHub:
             try:
                 url = (
                     f"https://client.smartthings.com/udo/file_links/"
-                    f"{file_id}?cid={CID}&di={self.device_id}"
+                    f"{file_id}?cid={self.cid}&di={self.device_id}"
                 )
-                # Use Samsung IoT token if available (OAuth mode);
-                # otherwise use the main token (PAT mode).
-                dl_headers = (
-                    self._samsung_iot_headers
-                    if self._samsung_iot_headers
-                    else self._headers
-                )
-                r = requests.get(
-                    url,
-                    headers=dl_headers,
-                    timeout=DEFAULT_TIMEOUT,
-                )
-                self._check_response(r)
+                r = self._get_file_link_redirect(url)
+                image = self._download_signed_image(r)
                 content_type = r.headers.get("content-type", "")
                 _LOGGER.debug(
                     "download_images[%d]: file_id=%s url=%s status=%s "
@@ -248,9 +343,9 @@ class FamilyHub:
                     url.split("?")[0][-40:],
                     r.status_code,
                     content_type,
-                    len(r.content),
+                    len(image),
                 )
-                result[idx] = r.content
+                result[idx] = image
                 successes += 1
             except AuthenticationError:
                 # Auth errors must propagate up so the coordinator can
@@ -274,11 +369,76 @@ class FamilyHub:
         )
         return successes > 0
 
+    def get_samsung_client_device_status(self) -> dict:
+        """Fetch device JSON from client.smartthings.com and return main status."""
+        if not self.device_id:
+            return {}
+        r = requests.get(
+            (
+                f"https://client.smartthings.com/devices/{self.device_id}"
+                "?includeAllowedActions=true&includeChildren=true&includeStatus=true"
+            ),
+            headers=self._client_headers,
+            timeout=DEFAULT_TIMEOUT,
+        )
+        self._check_response(r)
+        data = r.json()
+        try:
+            return data["status"]["components"]["main"]
+        except (KeyError, TypeError) as err:
+            raise ImageDownloadError(
+                "Samsung client device response did not contain main component status."
+            ) from err
+
+    def _get_file_link_redirect(self, url: str) -> requests.Response:
+        """Call file_links and return its redirect response."""
+        r = requests.get(
+            url,
+            headers=self._client_headers,
+            timeout=DEFAULT_TIMEOUT,
+            allow_redirects=False,
+        )
+        self._check_response(r)
+        if r.status_code not in (301, 302, 303, 307, 308):
+            raise ImageDownloadError(
+                f"Samsung file link endpoint returned HTTP {r.status_code}."
+            )
+        if not r.headers.get("Location"):
+            raise ImageDownloadError(
+                "Samsung file link response did not include Location."
+            )
+        return r
+
+    def _download_signed_image(self, redirect_response: requests.Response) -> bytes:
+        """Download a signed CDN image URL without forwarding Authorization."""
+        location = redirect_response.headers["Location"]
+        headers: dict[str, str] = {"Accept": "image/jpeg"}
+        if urlparse(location).hostname == "client.smartthings.com":
+            headers = self._client_headers
+        image_response = requests.get(
+            location,
+            headers=headers,
+            timeout=DEFAULT_TIMEOUT,
+            allow_redirects=True,
+        )
+        self._check_response(image_response)
+        image = image_response.content
+        content_type = image_response.headers.get("content-type", "").lower()
+        if (
+            "jpeg" not in content_type
+            and "jpg" not in content_type
+            and not image.startswith(b"\xff\xd8")
+        ):
+            raise ImageDownloadError(
+                "Downloaded Family Hub image did not look like a JPEG."
+            )
+        return image
+
     def get_all_device_status(self):
         """Get all of the devices in the account."""
         r = requests.get(
             "https://client.smartthings.com/devices/status",
-            headers=self._headers,
+            headers=self._client_headers,
             timeout=DEFAULT_TIMEOUT,
         )
         self._check_response(r)
@@ -404,4 +564,3 @@ class FamilyHub:
             r.status_code,
             r.text[:300],
         )
-
