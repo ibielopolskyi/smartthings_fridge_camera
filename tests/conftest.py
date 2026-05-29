@@ -259,10 +259,44 @@ ha_core = _make_module(
     ServiceCall=_ServiceCall,
     callback=lambda f: f,
 )
+class _ConfigFlowBase:
+    """Stub base class for config_entries.ConfigFlow.
+
+    Accepts `domain=` as a keyword in subclass declarations (the real HA base
+    class uses a metaclass to capture it; here we just ignore it so the
+    `class ConfigFlow(_ConfigFlowBase, domain=DOMAIN)` pattern works in tests).
+    """
+
+    def __init_subclass__(cls, domain: str = "", **kwargs):
+        super().__init_subclass__(**kwargs)
+
+    def async_show_menu(self, *, step_id, menu_options):
+        return {"type": "menu", "step_id": step_id, "menu_options": menu_options}
+
+    def async_show_form(self, *, step_id, data_schema=None, errors=None, description_placeholders=None):
+        return {
+            "type": "form",
+            "step_id": step_id,
+            "data_schema": data_schema,
+            "errors": errors or {},
+            "description_placeholders": description_placeholders or {},
+        }
+
+    def async_create_entry(self, *, title, data):
+        return {"type": "create_entry", "title": title, "data": data}
+
+    def async_abort(self, *, reason):
+        return {"type": "abort", "reason": reason}
+
+    def async_update_reload_and_abort(self, entry, *, data):
+        return {"type": "abort", "reason": "reauth_successful"}
+
+
 ha_config_entries = _make_module(
     "homeassistant.config_entries",
     ConfigEntry=_ConfigEntry,
-    ConfigFlow=MagicMock,
+    ConfigFlow=_ConfigFlowBase,
+    SOURCE_IGNORE="ignore",
 )
 ha_const = _make_module(
     "homeassistant.const",

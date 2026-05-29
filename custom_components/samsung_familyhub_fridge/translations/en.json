@@ -7,7 +7,11 @@
         "error": {
             "cannot_connect": "Failed to connect",
             "invalid_auth": "Invalid authentication",
-            "unknown": "Unexpected error"
+            "unknown": "Unexpected error",
+            "required": "This field is required",
+            "invalid_redirect_url": "No authorization code found in the URL. Check the URL and try again.",
+            "code_exchange_failed": "Failed to exchange the authorization code. Check your credentials and try again.",
+            "samsung_login_failed": "Samsung Account login failed. Check your email and password. Accounts with 2FA are not supported."
         },
         "step": {
             "user": {
@@ -15,7 +19,31 @@
                 "description": "Samsung deprecated indefinite SmartThings Personal Access Tokens on 2024-12-30 — new PATs expire every 24 hours. Reusing the HA core SmartThings integration's OAuth2 credentials avoids this limit entirely.",
                 "menu_options": {
                     "oauth": "Reuse HA core SmartThings OAuth (recommended)",
+                    "standalone_oauth": "Standalone SmartThings OAuth (custom app)",
                     "pat": "Enter a Personal Access Token (legacy)"
+                }
+            },
+            "standalone_oauth_credentials": {
+                "title": "Standalone SmartThings OAuth — App credentials",
+                "description": "Enter the client_id and client_secret from your SmartThings OAuth-In app (created via `smartthings apps:create`).",
+                "data": {
+                    "oauth_client_id": "Client ID",
+                    "oauth_client_secret": "Client Secret"
+                }
+            },
+            "standalone_oauth_link": {
+                "title": "Standalone SmartThings OAuth — Authorize",
+                "description": "Open this URL in a browser to authorize:\n\n`{authorization_url}`\n\nAfter authorizing, paste the full redirect URL or the raw authorization code below.",
+                "data": {
+                    "redirect_url_or_code": "Redirect URL or authorization code"
+                }
+            },
+            "standalone_oauth_samsung": {
+                "title": "Standalone SmartThings OAuth — Samsung Account (optional)",
+                "description": "Optionally provide Samsung Account credentials to enable IoT camera features. Leave both fields empty to skip — the integration will work without live image downloads.",
+                "data": {
+                    "samsung_email": "Samsung Account email (optional)",
+                    "samsung_password": "Samsung Account password (optional)"
                 }
             },
             "oauth": {
