@@ -12,6 +12,7 @@ import requests
 
 from homeassistant.core import HomeAssistant
 
+from .auth import AuthError
 from .const import CID, DEFAULT_TIMEOUT
 
 if TYPE_CHECKING:
@@ -123,6 +124,11 @@ class FamilyHub:
         # Only set in OAuth mode; PAT tokens already carry Samsung ID.
         self._samsung_iot_token: str | None = None
         self._samsung_iot_headers: dict | None = None
+        # Standalone OAuth state (set via attach_standalone_oauth)
+        self._standalone_oauth = None  # SmartThingsOAuth instance or None
+        self._token_expires_at: float = 0.0
+        self._stored_refresh_token: str | None = None
+        self._config_entry = None  # ConfigEntry reference for token persistence
 
     def set_samsung_iot_token(self, token: str) -> None:
         """Set a Samsung IoT token for client.smartthings.com image downloads.
@@ -136,6 +142,20 @@ class FamilyHub:
             "Accept": "application/vnd.smartthings+json;v=1",
         }
 
+    def attach_standalone_oauth(
+        self, oauth, expires_at: float, refresh_token: str, entry
+    ) -> None:
+        """Bind a SmartThingsOAuth instance for per-poll token refresh.
+
+        expires_at is a Unix timestamp; refresh_token is the current refresh
+        token to pass on the next refresh call; entry is the ConfigEntry used
+        to persist updated tokens.
+        """
+        self._standalone_oauth = oauth
+        self._token_expires_at = expires_at
+        self._stored_refresh_token = refresh_token
+        self._config_entry = entry
+
     def attach_oauth_session(
         self, session: "config_entry_oauth2_flow.OAuth2Session"
     ) -> None:
@@ -147,18 +167,43 @@ class FamilyHub:
         self._oauth_session = session
 
     async def async_ensure_fresh_token(self) -> None:
-        """If running in OAuth mode, ensure the bearer token is still valid.
+        """Ensure the bearer token is still valid before an API call.
 
-        No-op for PAT mode. Safe to call on every poll — HA's OAuth2Session
-        only performs a network refresh when the access_token is within
-        a few seconds of expiring.
+        - PAT mode: no-op (token is static).
+        - OAuth mode: delegates to HA's OAuth2Session which refreshes when
+          the access_token is close to expiry.
+        - Standalone OAuth mode: if the token expires within 5 minutes, calls
+          SmartThingsOAuth.refresh(), updates the in-memory token, and persists
+          the new refresh token to the config entry.  Raises
+          ConfigEntryAuthFailed when the refresh token is rejected (HTTP 401).
         """
-        if self._oauth_session is None:
-            return
-        await self._oauth_session.async_ensure_token_valid()
-        new_token = self._oauth_session.token.get("access_token")
-        if new_token and new_token != self.token:
-            self.update_token(new_token)
+        if self._oauth_session is not None:
+            await self._oauth_session.async_ensure_token_valid()
+            new_token = self._oauth_session.token.get("access_token")
+            if new_token and new_token != self.token:
+                self.update_token(new_token)
+        elif self._standalone_oauth is not None:
+            if time.time() > self._token_expires_at - 300:
+                try:
+                    new_creds = await self._hass.async_add_executor_job(
+                        self._standalone_oauth.refresh, self._stored_refresh_token
+                    )
+                except AuthError as err:
+                    raise ConfigEntryAuthFailed(
+                        "Standalone OAuth refresh token rejected — re-authentication required."
+                    ) from err
+                self.update_token(new_creds.access_token)
+                self._stored_refresh_token = new_creds.refresh_token
+                self._token_expires_at = time.time() + new_creds.expires_in
+                if self._config_entry is not None:
+                    from .const import CONF_OAUTH_REFRESH_TOKEN
+                    new_data = {
+                        **self._config_entry.data,
+                        CONF_OAUTH_REFRESH_TOKEN: new_creds.refresh_token,
+                    }
+                    self._hass.config_entries.async_update_entry(
+                        self._config_entry, data=new_data
+                    )
 
     def update_token(self, token: str) -> None:
         """Update the API token (used after re-authentication or OAuth refresh)."""

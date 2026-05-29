@@ -144,6 +144,7 @@ class SmartThingsOAuth:
         )
         if resp.status_code == 401:
             _LOGGER.error("Refresh token rejected (HTTP 401). Re-authorization required.")
+            raise AuthError("Refresh token rejected — re-authorization required")
         resp.raise_for_status()
         return _parse_token_response(resp.json())
 

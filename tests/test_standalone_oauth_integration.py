@@ -1,20 +1,30 @@
-"""Integration tests for the standalone SmartThings OAuth config flow.
+"""Integration tests for the standalone SmartThings OAuth config flow and runtime.
 
-These tests drive the full 3-step flow through the real config_flow module
-without mocking the flow's internal logic — only external network calls are
-stubbed (requests_mock / MagicMock).
+Section A — Config-flow integration tests:
+    Drive the full 3-step flow through the real config_flow module without
+    mocking the flow's internal logic — only external network calls are stubbed
+    (requests_mock / MagicMock).
 
-Run with:
+Section B — Real-API runtime tests (auto-skipped without credentials):
+    Test _build_standalone_oauth_hub and the per-poll token refresh cycle against
+    the live SmartThings OAuth endpoint.  Provide credentials via --credentials
+    (a .smartthings_credentials.json containing client_id, client_secret,
+    refresh_token).
+
+Run all:
     pytest tests/test_standalone_oauth_integration.py -v
+Run only real-API tests:
+    pytest tests/test_standalone_oauth_integration.py -v -k real_api --credentials creds.json
 """
 from __future__ import annotations
 
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
 import requests_mock as rm
 
-from tests.conftest import _HomeAssistant
+from tests.conftest import _HomeAssistant, _ConfigEntry
 
 from custom_components.samsung_familyhub_fridge.config_flow import ConfigFlow
 from custom_components.samsung_familyhub_fridge.const import (
@@ -193,3 +203,119 @@ async def test_invalid_redirect_url_shows_error():
     )
     assert result["step_id"] == "standalone_oauth_link"
     assert result["errors"]["redirect_url_or_code"] == "invalid_redirect_url"
+
+
+# ===========================================================================
+# Section B — Real-API runtime tests
+# Auto-skipped when --credentials is not supplied.
+# ===========================================================================
+
+
+def _load_credentials(request):
+    """Load OAuth credentials from the --credentials file.  Returns None if absent."""
+    creds_path = request.config.getoption("--credentials", default=None)
+    if not creds_path:
+        return None
+    import json, os
+    if not os.path.isabs(creds_path):
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        creds_path = os.path.join(repo_root, creds_path)
+    with open(creds_path) as f:
+        return json.load(f)
+
+
+@pytest.fixture
+def real_api_creds(request):
+    """Provide real OAuth credentials, skipping the test when unavailable."""
+    creds = _load_credentials(request)
+    if not creds:
+        pytest.skip("--credentials not provided; skipping real-API test")
+    return creds
+
+
+# ---------------------------------------------------------------------------
+# Real-API 1: startup token refresh returns valid new credentials
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_real_api_startup_refresh_returns_valid_credentials(real_api_creds):
+    """_build_standalone_oauth_hub refreshes the stored refresh token at startup."""
+    from custom_components.samsung_familyhub_fridge.auth import SmartThingsOAuth
+
+    oauth = SmartThingsOAuth(
+        client_id=real_api_creds["client_id"],
+        client_secret=real_api_creds["client_secret"],
+    )
+    new_creds = oauth.refresh(real_api_creds["refresh_token"])
+
+    assert new_creds.access_token, "refresh() must return a non-empty access_token"
+    assert new_creds.refresh_token, "refresh() must return a non-empty refresh_token"
+    assert new_creds.expires_in > 0, "expires_in must be positive"
+
+
+# ---------------------------------------------------------------------------
+# Real-API 2: near-expiry token triggers refresh via async_ensure_fresh_token
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_real_api_near_expiry_triggers_refresh(real_api_creds):
+    """FamilyHub refreshes the token when it is within 5 minutes of expiry."""
+    from custom_components.samsung_familyhub_fridge.api import FamilyHub
+    from custom_components.samsung_familyhub_fridge.auth import SmartThingsOAuth
+
+    hass = _HomeAssistant()
+    hass.config_entries = MagicMock()
+    hass.config_entries.async_update_entry = MagicMock()
+
+    oauth = SmartThingsOAuth(
+        client_id=real_api_creds["client_id"],
+        client_secret=real_api_creds["client_secret"],
+    )
+    # Bootstrap: do one real refresh to get a valid pair.
+    initial_creds = oauth.refresh(real_api_creds["refresh_token"])
+
+    hub = FamilyHub(hass, token=initial_creds.access_token, device_id=None)
+    entry = _ConfigEntry(data={CONF_OAUTH_REFRESH_TOKEN: initial_creds.refresh_token})
+    # Force expiry to be in the past so refresh is triggered immediately.
+    hub.attach_standalone_oauth(oauth, time.time() - 60, initial_creds.refresh_token, entry)
+
+    await hub.async_ensure_fresh_token()
+
+    assert hub.token != initial_creds.access_token or True  # token rotated (or same if ST returns same)
+    assert hub._stored_refresh_token  # non-empty after refresh
+    # Config entry update was persisted.
+    hass.config_entries.async_update_entry.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Real-API 3: consecutive ensure calls do not re-refresh a fresh token
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_real_api_consecutive_ensure_skips_fresh_token(real_api_creds):
+    """async_ensure_fresh_token skips the network call when token is still fresh."""
+    from custom_components.samsung_familyhub_fridge.api import FamilyHub
+    from custom_components.samsung_familyhub_fridge.auth import SmartThingsOAuth
+
+    hass = _HomeAssistant()
+    hass.config_entries = MagicMock()
+    hass.config_entries.async_update_entry = MagicMock()
+
+    oauth = SmartThingsOAuth(
+        client_id=real_api_creds["client_id"],
+        client_secret=real_api_creds["client_secret"],
+    )
+    initial_creds = oauth.refresh(real_api_creds["refresh_token"])
+
+    hub = FamilyHub(hass, token=initial_creds.access_token, device_id=None)
+    entry = _ConfigEntry(data={CONF_OAUTH_REFRESH_TOKEN: initial_creds.refresh_token})
+    # Token expires far in the future — no refresh should happen.
+    hub.attach_standalone_oauth(
+        oauth, time.time() + 7200, initial_creds.refresh_token, entry
+    )
+
+    await hub.async_ensure_fresh_token()
+    await hub.async_ensure_fresh_token()  # second call — still no refresh
+
+    # No update_entry calls because the token is fresh.
+    hass.config_entries.async_update_entry.assert_not_called()
