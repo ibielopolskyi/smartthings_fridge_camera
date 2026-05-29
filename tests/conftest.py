@@ -63,6 +63,25 @@ def pytest_addoption(parser):
         default=None,
         help="Samsung OAuth signin_client_secret (from SmartThings APK)",
     )
+    # --- Standalone OAuth runtime integration tests ---
+    parser.addoption(
+        "--standalone-oauth-client-id",
+        action="store",
+        default=None,
+        help="SmartThings app client_id for standalone OAuth runtime tests",
+    )
+    parser.addoption(
+        "--standalone-oauth-client-secret",
+        action="store",
+        default=None,
+        help="SmartThings app client_secret for standalone OAuth runtime tests",
+    )
+    parser.addoption(
+        "--standalone-oauth-refresh-token",
+        action="store",
+        default=None,
+        help="SmartThings refresh token for standalone OAuth runtime tests",
+    )
 
 
 @pytest.fixture
@@ -175,12 +194,38 @@ class _ServiceCall:
         self.data = data or {}
 
 
+class _ConfigEntriesManager:
+    """Minimal stub of hass.config_entries used in unit tests."""
+
+    def __init__(self):
+        self._entries = {}
+
+    def async_update_entry(self, entry, *, data=None, version=None, **kwargs):
+        if data is not None:
+            entry.data = data
+        if version is not None:
+            entry.version = version
+
+    def async_get_entry(self, entry_id):
+        return self._entries.get(entry_id)
+
+    def async_entries(self, domain=None):
+        return []
+
+    async def async_forward_entry_setups(self, entry, platforms):
+        return True
+
+    async def async_unload_platforms(self, entry, platforms):
+        return True
+
+
 class _HomeAssistant:
     """Minimal stub of homeassistant.core.HomeAssistant."""
 
     def __init__(self):
         self.async_add_executor_job = AsyncMock(side_effect=self._run_sync)
         self.services = _ServiceRegistry()
+        self.config_entries = _ConfigEntriesManager()
 
     async def _run_sync(self, func, *args):
         return func(*args)
@@ -436,3 +481,28 @@ except ImportError:
     vol.Required = lambda *a, **kw: a[0] if a else "required"
     vol.Optional = lambda *a, **kw: a[0] if a else "optional"
     sys.modules["voluptuous"] = vol
+
+
+@pytest.fixture
+def standalone_oauth_credentials(request):
+    """Provide standalone OAuth credentials; auto-skip without them.
+
+    Pass via CLI:
+        --standalone-oauth-client-id CID
+        --standalone-oauth-client-secret SECRET
+        --standalone-oauth-refresh-token REFRESH
+    """
+    client_id = request.config.getoption("--standalone-oauth-client-id")
+    client_secret = request.config.getoption("--standalone-oauth-client-secret")
+    refresh_token = request.config.getoption("--standalone-oauth-refresh-token")
+    if not (client_id and client_secret and refresh_token):
+        pytest.skip(
+            "Standalone OAuth credentials not provided — "
+            "pass --standalone-oauth-client-id, --standalone-oauth-client-secret, "
+            "and --standalone-oauth-refresh-token to run these tests"
+        )
+    return {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": refresh_token,
+    }

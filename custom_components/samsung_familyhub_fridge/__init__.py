@@ -2,14 +2,22 @@
 
 Auth modes (data["auth_mode"]):
 
-- "oauth"  : Reuse the HA core `smartthings` integration's OAuth2 credentials.
-             Tokens refresh automatically via HA's OAuth2Session — no manual
-             PAT rotation. Requires a working `smartthings` config entry
-             referenced by `data["linked_smartthings_entry_id"]`.
+- "oauth"           : Reuse the HA core `smartthings` integration's OAuth2
+                      credentials. Tokens refresh automatically via
+                      HA's OAuth2Session — no manual PAT rotation. Requires
+                      a working `smartthings` config entry referenced by
+                      `data["linked_smartthings_entry_id"]`.
 
-- "pat"    : Legacy SmartThings Personal Access Token (raw string). Samsung
-             deprecated indefinite PATs on 2024-12-30 — new PATs expire after
-             24 hours. Retained for backwards compatibility only.
+- "pat"             : Legacy SmartThings Personal Access Token (raw string).
+                      Samsung deprecated indefinite PATs on 2024-12-30 —
+                      new PATs expire after 24 hours. Retained for backwards
+                      compatibility only.
+
+- "standalone_oauth": Custom SmartThings app credentials (client_id +
+                      client_secret + refresh_token). Access token refreshed
+                      from stored refresh token at startup and before each
+                      poll when within 5 minutes of expiry. No HA core
+                      SmartThings integration needed.
 
 Config entries created before this integration version stored `{token, device_id}`
 without an `auth_mode` key; they are migrated to `auth_mode: "pat"` on first
@@ -18,6 +26,7 @@ load via `async_migrate_entry`.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -30,9 +39,13 @@ from .api import FamilyHub
 from .const import (
     AUTH_MODE_OAUTH,
     AUTH_MODE_PAT,
+    AUTH_MODE_STANDALONE_OAUTH,
     CONF_AUTH_MODE,
     CONF_DEVICE_ID,
     CONF_LINKED_SMARTTHINGS_ENTRY_ID,
+    CONF_OAUTH_CLIENT_ID,
+    CONF_OAUTH_CLIENT_SECRET,
+    CONF_OAUTH_REFRESH_TOKEN,
     CONF_SAMSUNG_IOT_AUTH_SERVER,
     CONF_SAMSUNG_IOT_REFRESH_TOKEN,
     CONF_TOKEN,
@@ -54,6 +67,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if auth_mode == AUTH_MODE_OAUTH:
         hub = await _build_oauth_hub(hass, entry, device_id)
+    elif auth_mode == AUTH_MODE_STANDALONE_OAUTH:
+        hub = await _build_standalone_oauth_hub(hass, entry, device_id)
     else:
         # Legacy PAT path — unchanged from v0.0.x.
         token = entry.data.get(CONF_TOKEN)
@@ -157,6 +172,79 @@ async def _build_oauth_hub(
     return hub
 
 
+async def _build_standalone_oauth_hub(
+    hass: HomeAssistant, entry: ConfigEntry, device_id: str | None
+) -> FamilyHub:
+    """Construct a FamilyHub using custom SmartThings app OAuth credentials.
+
+    Refreshes the stored refresh token at startup and wires up per-poll
+    proactive refresh (5-minute window). Samsung IoT token is also refreshed
+    at startup if present.
+
+    Raises ConfigEntryNotReady if the initial token refresh fails.
+    """
+    from .auth import SmartThingsOAuth, refresh_samsung_iot_token
+
+    client_id = entry.data.get(CONF_OAUTH_CLIENT_ID)
+    client_secret = entry.data.get(CONF_OAUTH_CLIENT_SECRET)
+    stored_refresh = entry.data.get(CONF_OAUTH_REFRESH_TOKEN)
+
+    if not client_id or not client_secret or not stored_refresh:
+        raise ConfigEntryNotReady(
+            "standalone_oauth config entry is missing oauth_client_id, "
+            "oauth_client_secret, or oauth_refresh_token. Reconfigure the "
+            "integration in Settings → Devices & Services."
+        )
+
+    oauth = SmartThingsOAuth(client_id=client_id, client_secret=client_secret)
+
+    try:
+        creds = await hass.async_add_executor_job(oauth.refresh, stored_refresh)
+    except Exception as err:
+        raise ConfigEntryNotReady(
+            f"Failed to refresh standalone OAuth access token at startup: {err}"
+        ) from err
+
+    # Persist the new refresh token (it rotates on every use).
+    updated_data: dict[str, Any] = {
+        **entry.data,
+        CONF_OAUTH_REFRESH_TOKEN: creds.refresh_token,
+    }
+
+    hub = FamilyHub(hass, token=creds.access_token, device_id=device_id)
+    expires_at = time.time() + (creds.expires_in or 86400)
+    hub.attach_standalone_oauth(
+        oauth,
+        expires_at,
+        refresh_token=creds.refresh_token,
+        config_entry=entry,
+    )
+
+    # Optionally refresh Samsung IoT token for image downloads.
+    iot_refresh = entry.data.get(CONF_SAMSUNG_IOT_REFRESH_TOKEN)
+    iot_server = entry.data.get(
+        CONF_SAMSUNG_IOT_AUTH_SERVER, "https://us-auth2.samsungosp.com"
+    )
+    if iot_refresh:
+        try:
+            iot_creds = await hass.async_add_executor_job(
+                refresh_samsung_iot_token, iot_refresh, iot_server
+            )
+            hub.set_samsung_iot_token(iot_creds.access_token)
+            if iot_creds.refresh_token != iot_refresh:
+                updated_data[CONF_SAMSUNG_IOT_REFRESH_TOKEN] = iot_creds.refresh_token
+            _LOGGER.info("Samsung IoT token refreshed for image downloads")
+        except Exception as err:  # pylint: disable=broad-except
+            _LOGGER.warning(
+                "Could not refresh Samsung IoT token — image downloads "
+                "will fail until resolved: %s",
+                err,
+            )
+
+    hass.config_entries.async_update_entry(entry, data=updated_data)
+    return hub
+
+
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Handle config entry updates (e.g. after re-authentication)."""
     hub: FamilyHub = hass.data[DOMAIN]["hub"]
@@ -165,7 +253,7 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
         new_token = entry.data.get(CONF_TOKEN)
         if new_token:
             hub.update_token(new_token)
-    # OAuth mode refreshes its token automatically — nothing to do here.
+    # OAuth and standalone_oauth modes refresh tokens automatically.
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -186,7 +274,9 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Migrate config entry data to the current schema.
 
     v1  → {token, device_id}                     (raw PAT)
-    v2  → adds auth_mode=(pat|oauth), optional linked_smartthings_entry_id
+    v2  → adds auth_mode=(pat|oauth|standalone_oauth),
+           optional linked_smartthings_entry_id,
+           optional oauth_client_id / oauth_client_secret / oauth_refresh_token
     """
     if entry.version == 1:
         new_data: dict[str, Any] = {**entry.data, CONF_AUTH_MODE: AUTH_MODE_PAT}
@@ -196,4 +286,5 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "Reconfigure in UI to switch to OAuth.",
             entry.entry_id,
         )
+    # v2 with auth_mode=standalone_oauth is already the correct schema — no-op.
     return True

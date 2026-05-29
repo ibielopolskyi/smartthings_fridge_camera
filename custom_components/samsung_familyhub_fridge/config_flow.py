@@ -338,11 +338,29 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, entry_data: dict[str, Any]
     ) -> FlowResult:
         """Handle re-authentication when the token has expired."""
+        auth_mode = entry_data.get(CONF_AUTH_MODE)
+
+        if auth_mode == AUTH_MODE_STANDALONE_OAUTH:
+            # Re-run the link step if we still have valid client credentials;
+            # otherwise restart from the credentials step.
+            client_id = entry_data.get(CONF_OAUTH_CLIENT_ID, "").strip()
+            client_secret = entry_data.get(CONF_OAUTH_CLIENT_SECRET, "").strip()
+            if client_id and client_secret:
+                oauth = SmartThingsOAuth(
+                    client_id=client_id, client_secret=client_secret
+                )
+                self._standalone_oauth = oauth
+                self._standalone_client_id = client_id
+                self._standalone_client_secret = client_secret
+                self._standalone_auth_url = oauth.get_authorization_url()
+                return await self.async_step_standalone_oauth_link()
+            return await self.async_step_standalone_oauth_credentials()
+
         # OAuth-mode entries should never reach reauth: HA's OAuth2Session
         # refreshes transparently and any hard failure is surfaced on the
         # linked smartthings entry itself. If we do land here, offer both
         # paths again so the user can re-link.
-        if entry_data.get(CONF_AUTH_MODE) == AUTH_MODE_OAUTH:
+        if auth_mode == AUTH_MODE_OAUTH:
             return await self.async_step_user()
         return await self.async_step_reauth_confirm()
 
