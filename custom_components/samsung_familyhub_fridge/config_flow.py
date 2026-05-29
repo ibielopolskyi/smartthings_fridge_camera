@@ -13,12 +13,19 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_entry_oauth2_flow
 
 from .api import AuthenticationError, FamilyHub
+from .auth import SmartThingsOAuth, SamsungAccountAuth
 from .const import (
     AUTH_MODE_OAUTH,
     AUTH_MODE_PAT,
+    AUTH_MODE_STANDALONE_OAUTH,
     CONF_AUTH_MODE,
     CONF_DEVICE_ID,
     CONF_LINKED_SMARTTHINGS_ENTRY_ID,
+    CONF_OAUTH_CLIENT_ID,
+    CONF_OAUTH_CLIENT_SECRET,
+    CONF_OAUTH_REFRESH_TOKEN,
+    CONF_SAMSUNG_IOT_AUTH_SERVER,
+    CONF_SAMSUNG_IOT_REFRESH_TOKEN,
     CONF_TOKEN,
     DOMAIN,
     SMARTTHINGS_DOMAIN,
@@ -108,10 +115,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if _smartthings_entries(self.hass):
             return self.async_show_menu(
                 step_id="user",
-                menu_options=["oauth", "pat"],
+                menu_options=["oauth", "standalone_oauth", "pat"],
             )
-        # No HA core smartthings entry → force PAT path
-        return await self.async_step_pat()
+        return self.async_show_menu(
+            step_id="user",
+            menu_options=["standalone_oauth", "pat"],
+        )
 
     # ---------------- OAuth path ----------------
 
@@ -180,6 +189,169 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="pat", data_schema=STEP_PAT_DATA_SCHEMA, errors=errors
+        )
+
+    # ---------------- Standalone OAuth path ----------------
+
+    async def async_step_standalone_oauth(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Menu entry point for the standalone OAuth path."""
+        return await self.async_step_standalone_oauth_credentials(user_input)
+
+    async def async_step_standalone_oauth_credentials(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Step 1 of standalone OAuth: collect client_id and client_secret."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            client_id = (user_input.get(CONF_OAUTH_CLIENT_ID) or "").strip()
+            client_secret = (user_input.get(CONF_OAUTH_CLIENT_SECRET) or "").strip()
+            if not client_id:
+                errors[CONF_OAUTH_CLIENT_ID] = "required"
+            if not client_secret:
+                errors[CONF_OAUTH_CLIENT_SECRET] = "required"
+
+            if not errors:
+                try:
+                    oauth = SmartThingsOAuth(
+                        client_id=client_id,
+                        client_secret=client_secret,
+                    )
+                    auth_url = await self.hass.async_add_executor_job(
+                        oauth.get_authorization_url
+                    )
+                    self._standalone_oauth = oauth
+                    self._standalone_auth_url = auth_url
+                except Exception:  # pylint: disable=broad-except
+                    _LOGGER.exception("Failed to build SmartThings authorization URL")
+                    errors["base"] = "unknown"
+
+            if not errors:
+                return await self.async_step_standalone_oauth_link()
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_OAUTH_CLIENT_ID): str,
+                vol.Required(CONF_OAUTH_CLIENT_SECRET): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="standalone_oauth_credentials",
+            data_schema=schema,
+            errors=errors,
+        )
+
+    async def async_step_standalone_oauth_link(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Step 2 of standalone OAuth: display auth URL and collect the redirect/code."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            raw = (user_input.get("redirect_url_or_code") or "").strip()
+            if not raw:
+                errors["redirect_url_or_code"] = "required"
+            else:
+                try:
+                    if raw.startswith("http"):
+                        code = SmartThingsOAuth.extract_code_from_redirect(raw)
+                    else:
+                        code = raw
+
+                    creds = await self.hass.async_add_executor_job(
+                        self._standalone_oauth.exchange_code, code
+                    )
+                    self._standalone_access_token = creds.access_token
+                    self._standalone_refresh_token = creds.refresh_token
+                    self._standalone_client_id = self._standalone_oauth.client_id
+                    self._standalone_client_secret = self._standalone_oauth.client_secret
+                except ValueError:
+                    errors["redirect_url_or_code"] = "invalid_code"
+                except Exception:  # pylint: disable=broad-except
+                    _LOGGER.exception("Failed to exchange SmartThings authorization code")
+                    errors["redirect_url_or_code"] = "invalid_code"
+
+            if not errors:
+                return await self.async_step_standalone_oauth_samsung()
+
+        schema = vol.Schema(
+            {
+                vol.Required("redirect_url_or_code"): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="standalone_oauth_link",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={"auth_url": getattr(self, "_standalone_auth_url", "")},
+        )
+
+    async def async_step_standalone_oauth_samsung(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Step 3 of standalone OAuth: optional Samsung Account login for IoT token."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            samsung_email = (user_input.get("samsung_email") or "").strip()
+            samsung_password = (user_input.get("samsung_password") or "").strip()
+
+            samsung_iot_refresh_token: str | None = None
+            samsung_iot_auth_server: str | None = None
+
+            if samsung_email and samsung_password:
+                try:
+                    samsung_auth = SamsungAccountAuth(
+                        email=samsung_email,
+                        password=samsung_password,
+                        signin_client_id="yfrtglt53o",
+                        signin_client_secret="",
+                    )
+                    iot_creds = await self.hass.async_add_executor_job(
+                        samsung_auth.login_iot
+                    )
+                    samsung_iot_refresh_token = iot_creds.refresh_token
+                    samsung_iot_auth_server = iot_creds.auth_server_url
+                except Exception:  # pylint: disable=broad-except
+                    _LOGGER.exception("Samsung Account IoT login failed")
+                    errors["base"] = "invalid_auth"
+            elif samsung_email or samsung_password:
+                # One field filled but not the other
+                errors["base"] = "samsung_partial_credentials"
+            else:
+                _LOGGER.warning(
+                    "Samsung Account credentials not provided — "
+                    "creating config entry without IoT token"
+                )
+
+            if not errors:
+                data: dict[str, Any] = {
+                    CONF_AUTH_MODE: AUTH_MODE_STANDALONE_OAUTH,
+                    CONF_OAUTH_CLIENT_ID: self._standalone_client_id,
+                    CONF_OAUTH_CLIENT_SECRET: self._standalone_client_secret,
+                    CONF_OAUTH_REFRESH_TOKEN: self._standalone_refresh_token,
+                }
+                if samsung_iot_refresh_token:
+                    data[CONF_SAMSUNG_IOT_REFRESH_TOKEN] = samsung_iot_refresh_token
+                if samsung_iot_auth_server:
+                    data[CONF_SAMSUNG_IOT_AUTH_SERVER] = samsung_iot_auth_server
+
+                return self.async_create_entry(
+                    title="Samsung Fridge Camera (Standalone OAuth)", data=data
+                )
+
+        schema = vol.Schema(
+            {
+                vol.Optional("samsung_email"): str,
+                vol.Optional("samsung_password"): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="standalone_oauth_samsung",
+            data_schema=schema,
+            errors=errors,
         )
 
     # ---------------- Reauth ----------------

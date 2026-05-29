@@ -6,7 +6,31 @@
         "description": "Samsung deprecated indefinite SmartThings Personal Access Tokens on 2024-12-30 — new PATs expire every 24 hours. Reusing the HA core SmartThings integration's OAuth2 credentials avoids this limit entirely.",
         "menu_options": {
           "oauth": "Reuse HA core SmartThings OAuth (recommended)",
+          "standalone_oauth": "Use my own SmartThings app (standalone OAuth)",
           "pat": "Enter a Personal Access Token (legacy)"
+        }
+      },
+      "standalone_oauth_credentials": {
+        "title": "Standalone SmartThings OAuth — App credentials",
+        "description": "Enter the client_id and client_secret from your SmartThings OAuth-In app (create one at https://account.smartthings.com/apps).",
+        "data": {
+          "oauth_client_id": "Client ID",
+          "oauth_client_secret": "Client Secret"
+        }
+      },
+      "standalone_oauth_link": {
+        "title": "Standalone SmartThings OAuth — Authorize",
+        "description": "Open the following URL in your browser and authorize access. Then paste the full redirect URL **or** just the authorization code here.\n\n{auth_url}",
+        "data": {
+          "redirect_url_or_code": "Redirect URL or authorization code"
+        }
+      },
+      "standalone_oauth_samsung": {
+        "title": "Standalone SmartThings OAuth — Samsung Account (optional)",
+        "description": "Optionally enter your Samsung Account credentials to enable IoT-level access (required for some Family Hub features). Leave blank to skip.",
+        "data": {
+          "samsung_email": "Samsung Account email (optional)",
+          "samsung_password": "Samsung Account password (optional)"
         }
       },
       "oauth": {
@@ -36,7 +60,10 @@
     "error": {
       "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
       "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
-      "unknown": "[%key:common::config_flow::error::unknown%]"
+      "unknown": "[%key:common::config_flow::error::unknown%]",
+      "invalid_code": "Invalid authorization code or redirect URL. Please copy the code or full redirect URL after authorizing.",
+      "required": "This field is required.",
+      "samsung_partial_credentials": "Provide both Samsung email and password, or leave both blank to skip."
     },
     "abort": {
       "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",

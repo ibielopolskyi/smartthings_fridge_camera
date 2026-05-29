@@ -259,10 +259,20 @@ ha_core = _make_module(
     ServiceCall=_ServiceCall,
     callback=lambda f: f,
 )
+class _ConfigFlow:
+    """Minimal ConfigFlow stub that accepts the ``domain=`` keyword."""
+
+    def __init_subclass__(cls, domain=None, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+    SOURCE_IGNORE = "ignore"
+
+
 ha_config_entries = _make_module(
     "homeassistant.config_entries",
     ConfigEntry=_ConfigEntry,
-    ConfigFlow=MagicMock,
+    ConfigFlow=_ConfigFlow,
+    SOURCE_IGNORE="ignore",
 )
 ha_const = _make_module(
     "homeassistant.const",
