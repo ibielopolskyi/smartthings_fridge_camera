@@ -27,6 +27,7 @@ from .const import (
     CONF_OAUTH_REFRESH_TOKEN,
     CONF_SAMSUNG_IOT_AUTH_SERVER,
     CONF_SAMSUNG_IOT_REFRESH_TOKEN,
+    CONF_SAMSUNG_SIGNIN_CLIENT_SECRET,
     CONF_TOKEN,
     DOMAIN,
     SMARTTHINGS_DOMAIN,
@@ -258,11 +259,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             email = (user_input.get("samsung_email") or "").strip()
             password = (user_input.get("samsung_password") or "").strip()
+            signin_secret = (user_input.get(CONF_SAMSUNG_SIGNIN_CLIENT_SECRET) or "").strip()
             data: dict[str, Any] = {
                 CONF_AUTH_MODE: AUTH_MODE_STANDALONE_OAUTH,
                 CONF_OAUTH_CLIENT_ID: self._standalone_client_id,
                 CONF_OAUTH_CLIENT_SECRET: self._standalone_client_secret,
                 CONF_OAUTH_REFRESH_TOKEN: self._standalone_refresh_token,
+                CONF_SAMSUNG_SIGNIN_CLIENT_SECRET: signin_secret,
             }
             if email and password:
                 try:
@@ -270,7 +273,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         email=email,
                         password=password,
                         signin_client_id=SAMSUNG_LOGIN_CLIENT_ID,
-                        signin_client_secret="",
+                        signin_client_secret=signin_secret,
                     )
                     iot_creds = await self.hass.async_add_executor_job(
                         samsung_auth.login_iot
@@ -297,12 +300,21 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             {
                 vol.Optional("samsung_email"): str,
                 vol.Optional("samsung_password"): str,
+                vol.Optional(CONF_SAMSUNG_SIGNIN_CLIENT_SECRET): str,
             }
         )
         return self.async_show_form(
             step_id="standalone_oauth_samsung",
             data_schema=schema,
             errors=errors,
+            description_placeholders={
+                "samsung_signin_client_secret_hint": (
+                    "The Samsung sign-in client secret is bundled inside the SmartThings "
+                    "Android APK. It can be extracted via APK decompilation or found in "
+                    "open-source SmartThings API mirrors. Leave blank to skip Samsung IoT "
+                    "login (camera will operate without live image refresh)."
+                )
+            },
         )
 
     # ---------------- PAT path (legacy) ----------------

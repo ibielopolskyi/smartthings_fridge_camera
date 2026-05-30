@@ -16,6 +16,7 @@ from custom_components.samsung_familyhub_fridge.const import (
     CONF_OAUTH_REFRESH_TOKEN,
     CONF_SAMSUNG_IOT_AUTH_SERVER,
     CONF_SAMSUNG_IOT_REFRESH_TOKEN,
+    CONF_SAMSUNG_SIGNIN_CLIENT_SECRET,
 )
 from custom_components.samsung_familyhub_fridge.config_flow import ConfigFlow
 
@@ -321,3 +322,65 @@ async def test_samsung_step_login_failure_shows_error():
 
     assert result["errors"]["base"] == "samsung_login_failed"
     assert result["step_id"] == "standalone_oauth_samsung"
+
+
+# ---------------------------------------------------------------------------
+# SCRUM-82: samsung_signin_client_secret acceptance tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_samsung_step_with_signin_secret_passes_it_to_auth():
+    """With email+password+signin_secret supplied, SamsungAccountAuth gets the non-empty secret."""
+    hass = _HomeAssistant()
+    flow = _make_flow(hass)
+    flow._standalone_client_id = "cid"
+    flow._standalone_client_secret = "csec"
+    flow._standalone_refresh_token = "rt"
+    flow.async_create_entry = lambda title, data: {"type": "create_entry", "title": title, "data": data}
+
+    with patch(
+        "custom_components.samsung_familyhub_fridge.config_flow.SamsungAccountAuth"
+    ) as MockSamsungAuth:
+        mock_auth = MagicMock()
+        mock_auth.login_iot.return_value = _fake_iot_creds()
+        MockSamsungAuth.return_value = mock_auth
+
+        result = await flow.async_step_standalone_oauth_samsung(
+            user_input={
+                "samsung_email": "user@example.com",
+                "samsung_password": "secret-pass",
+                CONF_SAMSUNG_SIGNIN_CLIENT_SECRET: "my-signin-secret",
+            }
+        )
+
+    assert result["type"] == "create_entry"
+    # Verify SamsungAccountAuth was constructed with the non-empty secret
+    call_kwargs = MockSamsungAuth.call_args[1]
+    assert call_kwargs["signin_client_secret"] == "my-signin-secret"
+    # Secret must also be stored in entry data for Task D
+    assert result["data"][CONF_SAMSUNG_SIGNIN_CLIENT_SECRET] == "my-signin-secret"
+    assert result["data"][CONF_SAMSUNG_IOT_REFRESH_TOKEN] == "iot-refresh"
+
+
+@pytest.mark.asyncio
+async def test_samsung_step_without_signin_secret_defaults_to_empty_no_exception():
+    """Without samsung_signin_client_secret supplied, secret defaults to '' and no exception is raised."""
+    hass = _HomeAssistant()
+    flow = _make_flow(hass)
+    flow._standalone_client_id = "cid"
+    flow._standalone_client_secret = "csec"
+    flow._standalone_refresh_token = "rt"
+    flow.async_create_entry = lambda title, data: {"type": "create_entry", "title": title, "data": data}
+
+    # No samsung_email/password → Samsung login is skipped entirely; no SamsungAccountAuth constructed.
+    result = await flow.async_step_standalone_oauth_samsung(
+        user_input={
+            "samsung_email": "",
+            "samsung_password": "",
+            # CONF_SAMSUNG_SIGNIN_CLIENT_SECRET intentionally absent
+        }
+    )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_SAMSUNG_SIGNIN_CLIENT_SECRET] == ""
+    assert CONF_SAMSUNG_IOT_REFRESH_TOKEN not in result["data"]

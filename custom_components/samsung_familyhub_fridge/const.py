@@ -22,5 +22,8 @@ CONF_OAUTH_CLIENT_ID = "oauth_client_id"
 CONF_OAUTH_CLIENT_SECRET = "oauth_client_secret"
 CONF_OAUTH_REFRESH_TOKEN = "oauth_refresh_token"
 
+# Samsung Account sign-in client secret (from SmartThings APK / open-source mirrors)
+CONF_SAMSUNG_SIGNIN_CLIENT_SECRET = "samsung_signin_client_secret"
+
 # Domain of the HA core SmartThings integration we piggyback on
 SMARTTHINGS_DOMAIN = "smartthings"

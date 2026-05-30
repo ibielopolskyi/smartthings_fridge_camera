@@ -40,10 +40,11 @@
             },
             "standalone_oauth_samsung": {
                 "title": "Standalone SmartThings OAuth — Samsung Account (optional)",
-                "description": "Optionally provide Samsung Account credentials to enable IoT camera features. Leave both fields empty to skip — the integration will work without live image downloads.",
+                "description": "Optionally provide Samsung Account credentials to enable IoT camera features. Leave all fields empty to skip — the integration will work without live image downloads.\n\n**Samsung sign-in client secret:** {samsung_signin_client_secret_hint}",
                 "data": {
                     "samsung_email": "Samsung Account email (optional)",
-                    "samsung_password": "Samsung Account password (optional)"
+                    "samsung_password": "Samsung Account password (optional)",
+                    "samsung_signin_client_secret": "Samsung sign-in client secret (optional)"
                 }
             },
             "oauth": {
