@@ -344,6 +344,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # paths again so the user can re-link.
         if entry_data.get(CONF_AUTH_MODE) == AUTH_MODE_OAUTH:
             return await self.async_step_user()
+        if entry_data.get(CONF_AUTH_MODE) == AUTH_MODE_STANDALONE_OAUTH:
+            return await self.async_step_reauth_standalone_oauth()
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
@@ -374,6 +376,95 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=vol.Schema({vol.Required(CONF_TOKEN): str}),
             errors=errors,
+        )
+
+
+    async def async_step_reauth_standalone_oauth(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Step 1 of standalone OAuth re-auth: collect client credentials."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            client_id = user_input.get(CONF_OAUTH_CLIENT_ID, "").strip()
+            client_secret = user_input.get(CONF_OAUTH_CLIENT_SECRET, "").strip()
+            if not client_id:
+                errors[CONF_OAUTH_CLIENT_ID] = "required"
+            elif not client_secret:
+                errors[CONF_OAUTH_CLIENT_SECRET] = "required"
+            else:
+                oauth = SmartThingsOAuth(
+                    client_id=client_id, client_secret=client_secret
+                )
+                self._reauth_standalone_oauth = oauth
+                self._reauth_standalone_client_id = client_id
+                self._reauth_standalone_client_secret = client_secret
+                self._reauth_standalone_auth_url = oauth.get_authorization_url()
+                return await self.async_step_reauth_standalone_oauth_link()
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_OAUTH_CLIENT_ID): str,
+                vol.Required(CONF_OAUTH_CLIENT_SECRET): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="reauth_standalone_oauth",
+            data_schema=schema,
+            errors=errors,
+        )
+
+    async def async_step_reauth_standalone_oauth_link(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Step 2 of standalone OAuth re-auth: display auth URL, collect code."""
+        errors: dict[str, str] = {}
+        oauth: SmartThingsOAuth | None = getattr(
+            self, "_reauth_standalone_oauth", None
+        )
+        if oauth is None:
+            return await self.async_step_reauth_standalone_oauth()
+
+        auth_url: str = (
+            getattr(self, "_reauth_standalone_auth_url", "")
+            or oauth.get_authorization_url()
+        )
+
+        if user_input is not None:
+            raw = user_input.get("redirect_url_or_code", "").strip()
+            if not raw:
+                errors["redirect_url_or_code"] = "required"
+            else:
+                try:
+                    if raw.startswith("http"):
+                        code = SmartThingsOAuth.extract_code_from_redirect(raw)
+                    else:
+                        code = raw
+                    creds = await self.hass.async_add_executor_job(
+                        oauth.exchange_code, code
+                    )
+                except ValueError:
+                    errors["redirect_url_or_code"] = "invalid_redirect_url"
+                except Exception:  # pylint: disable=broad-except
+                    _LOGGER.exception("Code exchange failed during reauth")
+                    errors["redirect_url_or_code"] = "code_exchange_failed"
+                else:
+                    reauth_entry = self._get_reauth_entry()
+                    new_data = {
+                        **reauth_entry.data,
+                        CONF_OAUTH_CLIENT_ID: self._reauth_standalone_client_id,
+                        CONF_OAUTH_CLIENT_SECRET: self._reauth_standalone_client_secret,
+                        CONF_OAUTH_REFRESH_TOKEN: creds.refresh_token,
+                    }
+                    return self.async_update_reload_and_abort(
+                        reauth_entry, data=new_data
+                    )
+
+        schema = vol.Schema({"redirect_url_or_code": str})
+        return self.async_show_form(
+            step_id="reauth_standalone_oauth_link",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={"authorization_url": auth_url},
         )
 
 
