@@ -259,13 +259,15 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             email = (user_input.get("samsung_email") or "").strip()
             password = (user_input.get("samsung_password") or "").strip()
-            signin_secret = (user_input.get(CONF_SAMSUNG_SIGNIN_CLIENT_SECRET) or "").strip()
+            signin_client_secret = (
+                user_input.get(CONF_SAMSUNG_SIGNIN_CLIENT_SECRET) or ""
+            ).strip()
             data: dict[str, Any] = {
                 CONF_AUTH_MODE: AUTH_MODE_STANDALONE_OAUTH,
                 CONF_OAUTH_CLIENT_ID: self._standalone_client_id,
                 CONF_OAUTH_CLIENT_SECRET: self._standalone_client_secret,
                 CONF_OAUTH_REFRESH_TOKEN: self._standalone_refresh_token,
-                CONF_SAMSUNG_SIGNIN_CLIENT_SECRET: signin_secret,
+                CONF_SAMSUNG_SIGNIN_CLIENT_SECRET: signin_client_secret,
             }
             if email and password:
                 try:
@@ -273,7 +275,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         email=email,
                         password=password,
                         signin_client_id=SAMSUNG_LOGIN_CLIENT_ID,
-                        signin_client_secret=signin_secret,
+                        signin_client_secret=signin_client_secret,
                     )
                     iot_creds = await self.hass.async_add_executor_job(
                         samsung_auth.login_iot
