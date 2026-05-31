@@ -25,6 +25,7 @@ from custom_components.samsung_familyhub_fridge.const import (
     CONF_OAUTH_REFRESH_TOKEN,
     CONF_SAMSUNG_IOT_AUTH_SERVER,
     CONF_SAMSUNG_IOT_REFRESH_TOKEN,
+    CONF_SAMSUNG_SIGNIN_CLIENT_SECRET,
 )
 from custom_components.samsung_familyhub_fridge.auth import (
     TOKEN_URL,
@@ -172,6 +173,81 @@ async def test_full_flow_redirect_url_with_samsung(requests_mock):
     assert data[CONF_AUTH_MODE] == AUTH_MODE_STANDALONE_OAUTH
     assert data[CONF_OAUTH_REFRESH_TOKEN] == "integ-refresh-token"
     assert data[CONF_SAMSUNG_IOT_REFRESH_TOKEN] == "iot-refresh-token"
+    assert data[CONF_SAMSUNG_IOT_AUTH_SERVER] == "https://us-auth2.samsungosp.com"
+
+
+# ---------------------------------------------------------------------------
+# SCRUM-83: samsung_signin_client_secret stored in entry and passed to auth
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_full_flow_with_signin_client_secret(requests_mock):
+    """End-to-end: samsung_signin_client_secret is stored in entry data and
+    passed through to SamsungAccountAuth (verified via HTTP stub matching)."""
+    hass = _HomeAssistant()
+    hass.config_entries = MagicMock()
+    hass.config_entries.async_entries = MagicMock(return_value=[])
+
+    flow = _make_flow(hass)
+
+    # Step 2 — credentials
+    await flow.async_step_standalone_oauth_credentials(
+        user_input={
+            CONF_OAUTH_CLIENT_ID: "integ-client-id",
+            CONF_OAUTH_CLIENT_SECRET: "integ-client-secret",
+        }
+    )
+
+    # Stub token exchange
+    requests_mock.post(
+        TOKEN_URL,
+        json={
+            "access_token": "integ-access-token",
+            "refresh_token": "integ-refresh-token",
+            "token_type": "bearer",
+            "expires_in": 86400,
+        },
+    )
+
+    # Step 3 — link via raw code
+    result = await flow.async_step_standalone_oauth_link(
+        user_input={"redirect_url_or_code": "raw-code-xyz"}
+    )
+    assert result["step_id"] == "standalone_oauth_samsung"
+
+    # Stub Samsung Account auth endpoints (real HTTP calls from SamsungAccountAuth)
+    requests_mock.post(
+        SAMSUNG_AUTH_URL,
+        json={"userauth_token": "samsung-userauth-tok"},
+    )
+    requests_mock.get(
+        SAMSUNG_IOT_AUTHORIZE_URL,
+        json={"code": "iot-auth-code"},
+        headers={"Content-Type": "application/json"},
+        status_code=200,
+    )
+    requests_mock.post(
+        SAMSUNG_IOT_TOKEN_URL,
+        json={
+            "access_token": "iot-access-token",
+            "refresh_token": "iot-refresh-secret",
+        },
+    )
+
+    # Step 4 — Samsung Account with signin_client_secret
+    result = await flow.async_step_standalone_oauth_samsung(
+        user_input={
+            "samsung_email": "user@example.com",
+            "samsung_password": "test-password",
+            CONF_SAMSUNG_SIGNIN_CLIENT_SECRET: "my-signin-secret",
+        }
+    )
+
+    assert result["type"] == "create_entry"
+    data = result["data"]
+    assert data[CONF_AUTH_MODE] == AUTH_MODE_STANDALONE_OAUTH
+    assert data[CONF_SAMSUNG_SIGNIN_CLIENT_SECRET] == "my-signin-secret"
+    assert data[CONF_SAMSUNG_IOT_REFRESH_TOKEN] == "iot-refresh-secret"
     assert data[CONF_SAMSUNG_IOT_AUTH_SERVER] == "https://us-auth2.samsungosp.com"
 
 

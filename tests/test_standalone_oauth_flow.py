@@ -16,6 +16,7 @@ from custom_components.samsung_familyhub_fridge.const import (
     CONF_OAUTH_REFRESH_TOKEN,
     CONF_SAMSUNG_IOT_AUTH_SERVER,
     CONF_SAMSUNG_IOT_REFRESH_TOKEN,
+    CONF_SAMSUNG_SIGNIN_CLIENT_SECRET,
 )
 from custom_components.samsung_familyhub_fridge.config_flow import ConfigFlow
 
@@ -321,3 +322,86 @@ async def test_samsung_step_login_failure_shows_error():
 
     assert result["errors"]["base"] == "samsung_login_failed"
     assert result["step_id"] == "standalone_oauth_samsung"
+
+
+# ---------------------------------------------------------------------------
+# SCRUM-83: samsung_signin_client_secret field
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_samsung_step_with_signin_client_secret_passes_to_auth():
+    """With email + password + samsung_signin_client_secret, SamsungAccountAuth must
+    receive the non-empty secret — not the hardcoded empty string."""
+    hass = _HomeAssistant()
+    flow = _make_flow(hass)
+    flow._standalone_client_id = "cid"
+    flow._standalone_client_secret = "csec"
+    flow._standalone_refresh_token = "rt"
+    flow.async_create_entry = lambda title, data: {"type": "create_entry", "title": title, "data": data}
+
+    with patch(
+        "custom_components.samsung_familyhub_fridge.config_flow.SamsungAccountAuth"
+    ) as MockSamsungAuth:
+        mock_auth = MagicMock()
+        mock_auth.login_iot.return_value = _fake_iot_creds()
+        MockSamsungAuth.return_value = mock_auth
+
+        result = await flow.async_step_standalone_oauth_samsung(
+            user_input={
+                "samsung_email": "user@example.com",
+                "samsung_password": "pass",
+                CONF_SAMSUNG_SIGNIN_CLIENT_SECRET: "my-secret-abc",
+            }
+        )
+
+    assert result["type"] == "create_entry"
+    data = result["data"]
+    # Secret stored in config entry data
+    assert data[CONF_SAMSUNG_SIGNIN_CLIENT_SECRET] == "my-secret-abc"
+    # SamsungAccountAuth constructed with the non-empty secret
+    MockSamsungAuth.assert_called_once()
+    call_kwargs = MockSamsungAuth.call_args
+    assert call_kwargs.kwargs.get("signin_client_secret") == "my-secret-abc" or \
+           (call_kwargs.args and call_kwargs.args[3] == "my-secret-abc")
+    # IoT tokens present
+    assert data[CONF_SAMSUNG_IOT_REFRESH_TOKEN] == "iot-refresh"
+    assert data[CONF_SAMSUNG_IOT_AUTH_SERVER] == "https://us-auth2.samsungosp.com"
+
+
+@pytest.mark.asyncio
+async def test_samsung_step_without_signin_client_secret_defaults_to_empty():
+    """Without samsung_signin_client_secret in user_input, the secret defaults to ''
+    and no exception is raised — existing behaviour preserved."""
+    hass = _HomeAssistant()
+    flow = _make_flow(hass)
+    flow._standalone_client_id = "cid"
+    flow._standalone_client_secret = "csec"
+    flow._standalone_refresh_token = "rt"
+    flow.async_create_entry = lambda title, data: {"type": "create_entry", "title": title, "data": data}
+
+    with patch(
+        "custom_components.samsung_familyhub_fridge.config_flow.SamsungAccountAuth"
+    ) as MockSamsungAuth:
+        mock_auth = MagicMock()
+        mock_auth.login_iot.return_value = _fake_iot_creds()
+        MockSamsungAuth.return_value = mock_auth
+
+        result = await flow.async_step_standalone_oauth_samsung(
+            user_input={
+                "samsung_email": "user@example.com",
+                "samsung_password": "pass",
+                # samsung_signin_client_secret intentionally absent
+            }
+        )
+
+    assert result["type"] == "create_entry"
+    data = result["data"]
+    # Secret stored as empty string in config entry data
+    assert data[CONF_SAMSUNG_SIGNIN_CLIENT_SECRET] == ""
+    # SamsungAccountAuth constructed with empty secret
+    MockSamsungAuth.assert_called_once()
+    call_kwargs = MockSamsungAuth.call_args
+    secret_val = call_kwargs.kwargs.get("signin_client_secret", None)
+    if secret_val is None and call_kwargs.args:
+        secret_val = call_kwargs.args[3]
+    assert secret_val == ""
