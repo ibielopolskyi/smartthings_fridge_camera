@@ -237,6 +237,22 @@ class FamilyHub:
                 f"SmartThings API returned HTTP {response.status_code}. "
                 "Token is expired or invalid."
             )
+        if response.status_code == 400:
+            try:
+                body = response.json()
+                err = body.get("error", {})
+                if (
+                    err.get("code") == "BadRequestError"
+                    and "No samsung id" in err.get("message", "")
+                ):
+                    raise AuthenticationError(
+                        "No samsung id available — switch to Standalone OAuth or add "
+                        "Samsung Account credentials"
+                    )
+            except AuthenticationError:
+                raise
+            except Exception:
+                pass
         if not response.ok:
             _LOGGER.warning(
                 "SmartThings API request failed: HTTP %s - %s",
