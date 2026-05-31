@@ -152,7 +152,12 @@ async def _build_oauth_hub(
             iot_creds = await hass.async_add_executor_job(
                 refresh_samsung_iot_token, iot_refresh, iot_server
             )
-            hub.set_samsung_iot_token(iot_creds.access_token)
+            hub.set_samsung_iot_token(
+                iot_creds.access_token,
+                refresh_token=iot_creds.refresh_token,
+                auth_server=iot_server,
+                entry=entry,
+            )
             # Persist the new refresh token for next startup
             if iot_creds.refresh_token != iot_refresh:
                 new_data = {
@@ -216,7 +221,12 @@ async def _build_standalone_oauth_hub(
             iot_creds = await hass.async_add_executor_job(
                 refresh_samsung_iot_token, iot_refresh, iot_server
             )
-            hub.set_samsung_iot_token(iot_creds.access_token)
+            hub.set_samsung_iot_token(
+                iot_creds.access_token,
+                refresh_token=iot_creds.refresh_token,
+                auth_server=iot_server,
+                entry=entry,
+            )
             if iot_creds.refresh_token != iot_refresh:
                 new_data = {
                     **entry.data,

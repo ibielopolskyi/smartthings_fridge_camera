@@ -123,18 +123,71 @@ class FamilyHub:
         # Only set in OAuth mode; PAT tokens already carry Samsung ID.
         self._samsung_iot_token: str | None = None
         self._samsung_iot_headers: dict | None = None
+        self._samsung_iot_refresh_token: str | None = None
+        self._samsung_iot_auth_server: str = "https://us-auth2.samsungosp.com"
+        self._entry = None
 
-    def set_samsung_iot_token(self, token: str) -> None:
+    def set_samsung_iot_token(
+        self,
+        token: str,
+        refresh_token: str | None = None,
+        auth_server: str | None = None,
+        entry=None,
+    ) -> None:
         """Set a Samsung IoT token for client.smartthings.com image downloads.
 
         This token carries Samsung Account identity and is needed because
         the udo/file_links endpoint rejects standard SmartThings OAuth tokens.
+        Optionally store a refresh_token, auth_server, and config entry so
+        download_images() can silently refresh the token on auth failures.
         """
         self._samsung_iot_token = token
         self._samsung_iot_headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.smartthings+json;v=1",
         }
+        if refresh_token is not None:
+            self._samsung_iot_refresh_token = refresh_token
+        if auth_server is not None:
+            self._samsung_iot_auth_server = auth_server
+        if entry is not None:
+            self._entry = entry
+
+    def _is_no_samsung_id_error(self, response: requests.Response) -> bool:
+        """Return True if response body contains 'No samsung id' (400 auth error)."""
+        try:
+            return "No samsung id" in response.text
+        except Exception:
+            return False
+
+    def _do_samsung_iot_refresh(self) -> None:
+        """Refresh the Samsung IoT token in-place and persist the new refresh token."""
+        from .auth import refresh_samsung_iot_token
+
+        try:
+            iot_creds = refresh_samsung_iot_token(
+                self._samsung_iot_refresh_token,
+                self._samsung_iot_auth_server,
+            )
+        except Exception as err:
+            raise AuthenticationError(
+                f"Samsung IoT token refresh failed: {err}"
+            ) from err
+
+        self.set_samsung_iot_token(
+            iot_creds.access_token,
+            refresh_token=iot_creds.refresh_token,
+            auth_server=self._samsung_iot_auth_server,
+            entry=self._entry,
+        )
+
+        if self._entry is not None:
+            from .const import CONF_SAMSUNG_IOT_REFRESH_TOKEN
+            new_data = {
+                **self._entry.data,
+                CONF_SAMSUNG_IOT_REFRESH_TOKEN: iot_creds.refresh_token,
+            }
+            self._hass.config_entries.async_update_entry(self._entry, data=new_data)
 
     def attach_oauth_session(
         self, session: "config_entry_oauth2_flow.OAuth2Session"
@@ -238,6 +291,26 @@ class FamilyHub:
                     headers=dl_headers,
                     timeout=DEFAULT_TIMEOUT,
                 )
+                # Samsung IoT in-session refresh: when using IoT headers and the
+                # server returns 401/403 or a 400 'No samsung id' error, attempt
+                # a silent token refresh and retry once before surfacing as
+                # ConfigEntryAuthFailed.
+                if dl_headers is self._samsung_iot_headers:
+                    auth_fail = r.status_code in (401, 403) or (
+                        r.status_code == 400 and self._is_no_samsung_id_error(r)
+                    )
+                    if auth_fail:
+                        if not self._samsung_iot_refresh_token:
+                            raise AuthenticationError(
+                                f"Samsung IoT authentication failed "
+                                f"(HTTP {r.status_code}) — no refresh token available."
+                            )
+                        self._do_samsung_iot_refresh()
+                        r = requests.get(
+                            url,
+                            headers=self._samsung_iot_headers,
+                            timeout=DEFAULT_TIMEOUT,
+                        )
                 self._check_response(r)
                 content_type = r.headers.get("content-type", "")
                 _LOGGER.debug(
