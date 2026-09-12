@@ -30,7 +30,7 @@ class DataCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             name="File ID refresher",
-            update_interval=timedelta(seconds=10),
+            update_interval=timedelta(seconds=15),
         )
         self._hass = hass
         self.api = api
@@ -49,34 +49,47 @@ class DataCoordinator(DataUpdateCoordinator):
                     self.api.get_all_device_status
                 )
                 self.api.set_device_status(status)
+
+            # 1. Always poll current device status
+            status = await self._hass.async_add_executor_job(
+                self.api.get_current_device_status
+            )
+            if status:
+                self.api.set_current_device_status(status)
+                self.api.extract_device_data()
+
+            # 2. If door closed or refresh requested, trigger camera update
             if self.api.should_update:
                 _LOGGER.debug("should_update=True → sending refresh command to fridge")
                 await self._hass.async_add_executor_job(self.api.update_camera)
                 self.api.should_update = False
-            elif set(self.last_file_ids) != set(self.api.get_file_ids()):
-                new_ids = self.api.get_file_ids()
-                _LOGGER.debug(
-                    "file IDs changed: %s → %s, downloading images",
+
+            # 3. Download images if file IDs changed
+            new_ids = self.api.get_file_ids()
+            if new_ids and set(self.last_file_ids) != set(new_ids):
+                _LOGGER.warning(
+                    "Family Hub file IDs changed: %s → %s, downloading images",
                     self.last_file_ids,
                     new_ids,
                 )
+                # Mark as seen so failed downloads (e.g. 404 on expired IDs)
+                # do not trigger an infinite tight retry loop
+                self.last_file_ids = list(new_ids)
                 success = await self._hass.async_add_executor_job(
                     self.api.download_images
                 )
                 if success:
                     self.last_updated_at = time.time()
-                    self.last_file_ids = new_ids
+                    _LOGGER.warning(
+                        "Successfully refreshed %d Family Hub camera images",
+                        sum(1 for img in self.api.downloaded_images if img and img.startswith(b"\xff\xd8")),
+                    )
                 else:
                     _LOGGER.warning(
-                        "download_images returned no successes — will retry "
-                        "on next poll"
+                        "download_images returned no valid JPEGs for file_ids: %s",
+                        new_ids,
                     )
             else:
-                status = await self._hass.async_add_executor_job(
-                    self.api.get_current_device_status
-                )
-                self.api.set_current_device_status(status)
-                self.api.extract_device_data()
                 _LOGGER.debug(
                     "polled status: last_closed=%s should_update=%s file_ids=%s",
                     self.api.last_closed,
@@ -88,6 +101,8 @@ class DataCoordinator(DataUpdateCoordinator):
                 "SmartThings token expired or is invalid. "
                 "Please re-authenticate with a new token."
             ) from err
+        except Exception as err:
+            _LOGGER.warning("Error in Family Hub coordinator poll: %s", err)
 
 
 class FamilyHub:
@@ -269,7 +284,8 @@ class FamilyHub:
         self._device_status = status
 
     def set_current_device_status(self, status):
-        self._current_device_status = status
+        if isinstance(status, dict) and "error" not in status:
+            self._current_device_status = status
 
     def download_images(self) -> bool:
         """Download the actual camera images from SmartThings.
@@ -328,19 +344,27 @@ class FamilyHub:
                             timeout=DEFAULT_TIMEOUT,
                         )
                 self._check_response(r)
-                content_type = r.headers.get("content-type", "")
-                _LOGGER.debug(
-                    "download_images[%d]: file_id=%s url=%s status=%s "
-                    "content_type=%s length=%d",
-                    idx,
-                    file_id[:8],
-                    url.split("?")[0][-40:],
-                    r.status_code,
-                    content_type,
-                    len(r.content),
-                )
-                result[idx] = r.content
-                successes += 1
+                if r.status_code == 200 and r.content.startswith(b"\xff\xd8"):
+                    content_type = r.headers.get("content-type", "")
+                    _LOGGER.debug(
+                        "download_images[%d]: file_id=%s url=%s status=%s "
+                        "content_type=%s length=%d",
+                        idx,
+                        file_id[:8],
+                        url.split("?")[0][-40:],
+                        r.status_code,
+                        content_type,
+                        len(r.content),
+                    )
+                    result[idx] = r.content
+                    successes += 1
+                else:
+                    _LOGGER.warning(
+                        "download_images[%d]: file_id=%s returned status=%s, not a valid JPEG",
+                        idx,
+                        file_id[:8],
+                        r.status_code,
+                    )
             except AuthenticationError:
                 # Auth errors must propagate up so the coordinator can
                 # trigger reauth — do not swallow.
@@ -380,18 +404,24 @@ class FamilyHub:
 
     def get_current_device_status(self):
         """Get the current device status."""
-        r = requests.get(
-            f"https://api.smartthings.com/v1/devices/{self.device_id}/components/main/status",
-            headers=self._headers,
-            timeout=DEFAULT_TIMEOUT,
-        )
-        self._check_response(r)
-        data = r.json()
-        if isinstance(data, dict) and "error" in data:
-            _LOGGER.error(
-                "SmartThings device status returned error: %s", data["error"]
+        try:
+            r = requests.get(
+                f"https://api.smartthings.com/v1/devices/{self.device_id}/components/main/status",
+                headers=self._headers,
+                timeout=DEFAULT_TIMEOUT,
             )
-        return data
+            self._check_response(r)
+            data = r.json()
+            if isinstance(data, dict) and "error" in data:
+                _LOGGER.error(
+                    "SmartThings device status returned error: %s", data["error"]
+                )
+            return data
+        except AuthenticationError:
+            raise
+        except Exception as err:
+            _LOGGER.warning("Error fetching SmartThings device status: %s", err)
+            return None
 
     def extract_device_data(self):
         """Extract contact sensor data to detect door close events."""
@@ -487,6 +517,9 @@ class FamilyHub:
             },
             timeout=DEFAULT_TIMEOUT,
         )
+        if r.status_code == 403 and ("x:devices" in r.text or "ConstraintViolation" in r.text):
+            _LOGGER.info("update_camera: command execute permission (x:devices:*) not present (HTTP %s); photos update automatically on fridge door close.", r.status_code)
+            return
         self._check_response(r)
         _LOGGER.debug(
             "update_camera: status=%s body=%s",

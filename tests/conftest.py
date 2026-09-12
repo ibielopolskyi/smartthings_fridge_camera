@@ -229,6 +229,10 @@ class _SensorEntity:
     pass
 
 
+class _SensorDeviceClass:
+    TIMESTAMP = "timestamp"
+
+
 class _Camera:
     def __init__(self):
         pass
@@ -390,10 +394,15 @@ ha_components_local_file_camera = _make_module(
     "homeassistant.components.local_file.camera",
     LocalFile=MagicMock,
 )
+ha_helpers_device_registry = _make_module(
+    "homeassistant.helpers.device_registry",
+    DeviceInfo=dict,
+)
 ha_components_sensor = _make_module(
     "homeassistant.components.sensor",
     PLATFORM_SCHEMA=MagicMock,
     SensorEntity=_SensorEntity,
+    SensorDeviceClass=_SensorDeviceClass,
 )
 ha_components_update = _make_module(
     "homeassistant.components.update",
@@ -416,6 +425,7 @@ _modules = {
     "homeassistant.helpers.dispatcher": ha_helpers_dispatcher,
     "homeassistant.helpers.typing": ha_helpers_typing,
     "homeassistant.helpers.config_entry_oauth2_flow": ha_helpers_oauth2,
+    "homeassistant.helpers.device_registry": ha_helpers_device_registry,
     "homeassistant.components": ha_components,
     "homeassistant.components.camera": ha_components_camera,
     "homeassistant.components.local_file": ha_components_local_file,
