@@ -34,7 +34,7 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_entry_oauth2_flow
 
-from .api import FamilyHub
+from .api import FamilyHub, DataCoordinator
 from .const import (
     AUTH_MODE_OAUTH,
     AUTH_MODE_PAT,
@@ -80,6 +80,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data[DOMAIN][entry.entry_id] = entry
     hass.data[DOMAIN]["hub"] = hub
+
+    coordinator = DataCoordinator(hass, hub)
+    hass.data[DOMAIN]["coordinator"] = coordinator
+    if hasattr(coordinator, "async_refresh"):
+        await coordinator.async_refresh()
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
