@@ -31,10 +31,11 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, ServiceValidationError
 from homeassistant.helpers import config_entry_oauth2_flow
 
 from .api import FamilyHub
+from .config_flow import _validate_pat
 from .const import (
     AUTH_MODE_OAUTH,
     AUTH_MODE_PAT,
@@ -94,6 +95,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.info("Manual refresh command sent successfully")
 
     hass.services.async_register(DOMAIN, "refresh", _handle_refresh)
+
+    async def _handle_update_pat(call: ServiceCall) -> None:
+        """Accept an externally-rotated PAT and apply it to this entry.
+
+        Intended for an external rotation process (e.g. a scheduled browser
+        automation that generates a fresh SmartThings PAT) to push a new
+        token in without going through the UI reauth flow. Validates the
+        token the same way the config flow does before applying it.
+        """
+        new_token = call.data["token"]
+        try:
+            await _validate_pat(hass, {**entry.data, CONF_TOKEN: new_token})
+        except Exception as err:  # pylint: disable=broad-except
+            raise ServiceValidationError(f"Rejected new PAT: {err}") from err
+
+        hass.config_entries.async_update_entry(
+            entry,
+            data={**entry.data, CONF_TOKEN: new_token, CONF_AUTH_MODE: AUTH_MODE_PAT},
+        )
+        _LOGGER.info("PAT updated via update_pat service")
+
+    hass.services.async_register(DOMAIN, "update_pat", _handle_update_pat)
 
     return True
 
@@ -289,6 +312,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             eid for eid in hass.data[DOMAIN] if eid != "hub"
         ]:
             hass.services.async_remove(DOMAIN, "refresh")
+            hass.services.async_remove(DOMAIN, "update_pat")
 
     return unload_ok
 

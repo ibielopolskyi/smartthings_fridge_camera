@@ -5,3 +5,20 @@ refresh:
     new camera photos. Photos are captured by the fridge hardware on
     door-close events; this service sends the same command but actual
     capture depends on the fridge's current state and firmware.
+
+update_pat:
+  name: Update PAT
+  description: >
+    Apply an externally-rotated SmartThings Personal Access Token to this
+    config entry, without going through the UI reauth flow. Intended for
+    an external rotation process to keep the integration authenticated
+    since SmartThings PATs expire after 24 hours. The token is validated
+    the same way the config flow validates a manually-entered PAT.
+  fields:
+    token:
+      name: Token
+      description: The new SmartThings PAT.
+      required: true
+      example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+      selector:
+        text:
