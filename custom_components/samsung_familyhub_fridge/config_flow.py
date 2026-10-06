@@ -153,6 +153,15 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Unexpected exception during OAuth validation")
                 errors["base"] = "unknown"
             else:
+                # Reauth for an OAuth-mode entry lands here via async_step_user
+                # (see async_step_reauth) — a reauth flow must update the
+                # existing entry, not create a new one, or HA's core raises
+                # "Creates a new entry in a 'reauth' flow" and this shows up
+                # to the user as a bare "Unknown error".
+                if self.source == config_entries.SOURCE_REAUTH:
+                    return self.async_update_reload_and_abort(
+                        self._get_reauth_entry(), data=data
+                    )
                 return self.async_create_entry(
                     title="Samsung Fridge Camera (OAuth)", data=data
                 )
@@ -294,6 +303,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
 
             if not errors:
+                if self.source == config_entries.SOURCE_REAUTH:
+                    return self.async_update_reload_and_abort(
+                        self._get_reauth_entry(), data=data
+                    )
                 return self.async_create_entry(
                     title="Samsung Fridge Camera (Standalone OAuth)", data=data
                 )
@@ -337,6 +350,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
             else:
                 data = {**info, CONF_AUTH_MODE: AUTH_MODE_PAT}
+                # Same reauth-vs-fresh-entry distinction as async_step_oauth
+                # above — PAT mode can also be reached via async_step_reauth
+                # → async_step_user's menu.
+                if self.source == config_entries.SOURCE_REAUTH:
+                    return self.async_update_reload_and_abort(
+                        self._get_reauth_entry(), data=data
+                    )
                 return self.async_create_entry(
                     title="Samsung Fridge Camera", data=data
                 )
