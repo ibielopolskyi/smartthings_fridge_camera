@@ -253,6 +253,9 @@ class SamsungBrowserLogin:
         if not userauth_token:
             raise AuthError(f"Samsung authenticate returned no token: {resp.text[:300]}")
         _LOGGER.debug("Samsung browser sign-in: got userauth_token")
+        # Kept so the config flow can store them as a renewal backup.
+        self.userauth_token = userauth_token
+        self.username = username
 
         return get_samsung_iot_token(
             userauth_token=userauth_token,

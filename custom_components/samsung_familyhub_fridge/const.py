@@ -11,6 +11,12 @@ CONF_DEVICE_ID = "device_id"
 CONF_LINKED_SMARTTHINGS_ENTRY_ID = "linked_smartthings_entry_id"
 CONF_SAMSUNG_IOT_REFRESH_TOKEN = "samsung_iot_refresh_token"
 CONF_SAMSUNG_IOT_AUTH_SERVER = "samsung_iot_auth_server"
+# Backup for renewing the Samsung IoT token if its refresh token is refused:
+# the longer-lived Samsung Account userauth token from the login, plus the
+# login id and device identifier it was issued with.
+CONF_SAMSUNG_USERAUTH_TOKEN = "samsung_userauth_token"
+CONF_SAMSUNG_LOGIN_ID = "samsung_login_id"
+CONF_SAMSUNG_PHYSICAL_ADDRESS = "samsung_physical_address"
 # Optional SmartThings personal access token used only for picture downloads
 CONF_IMAGE_TOKEN = "image_token"
 

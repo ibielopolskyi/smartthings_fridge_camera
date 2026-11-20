@@ -239,10 +239,13 @@ class SamsungAccountAuth:
           3. /token                 → access_token + refresh_token
         """
         userauth_token = self._request_authentication()
+        # Kept so the caller can store it as a backup for renewals.
+        self.userauth_token = userauth_token
         return get_samsung_iot_token(
             userauth_token=userauth_token,
             login_id=self.email,
             auth_server_url="https://us-auth2.samsungosp.com",
+            physical_address_text=self._device_id,
         )
 
     def _request_authentication(self) -> str:
@@ -514,3 +517,47 @@ def refresh_samsung_iot_token(
         refresh_token=body.get("refresh_token", refresh_token),
         auth_server_url=auth_server_url,
     )
+
+
+def renew_samsung_iot_token(
+    refresh_token: str | None,
+    auth_server_url: str = "https://us-auth2.samsungosp.com",
+    userauth_token: str | None = None,
+    login_id: str = "",
+    physical_address_text: str | None = None,
+) -> SamsungIoTCredentials:
+    """Renew the Samsung IoT token, falling back to the userauth token.
+
+    First uses the IoT refresh token. If Samsung refuses it (expired or
+    revoked) and a userauth token from the original login is stored, asks
+    for a brand-new IoT token with that instead (as the uTag app does).
+    """
+    first_error: Exception | None = None
+    if refresh_token:
+        try:
+            return refresh_samsung_iot_token(refresh_token, auth_server_url)
+        except Exception as err:  # pylint: disable=broad-except
+            first_error = err
+            if not userauth_token:
+                raise
+            _LOGGER.warning(
+                "Samsung IoT refresh token refused (%s); renewing with the "
+                "backup Samsung Account token instead",
+                err,
+            )
+    if not userauth_token:
+        raise AuthError("No Samsung IoT refresh token or backup token stored")
+    try:
+        return get_samsung_iot_token(
+            userauth_token=userauth_token,
+            login_id=login_id or "",
+            auth_server_url=auth_server_url,
+            physical_address_text=physical_address_text,
+        )
+    except Exception as err:
+        if first_error is not None:
+            raise AuthError(
+                f"Samsung IoT renewal failed: refresh token: {first_error}; "
+                f"backup token: {err}"
+            ) from err
+        raise

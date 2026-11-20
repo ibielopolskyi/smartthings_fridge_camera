@@ -25,6 +25,7 @@ load via `async_migrate_entry`.
 """
 from __future__ import annotations
 
+from datetime import timedelta
 import logging
 from typing import Any
 
@@ -33,6 +34,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_entry_oauth2_flow
+from homeassistant.helpers.event import async_track_time_interval
 
 from .api import FamilyHub
 from .const import (
@@ -48,6 +50,9 @@ from .const import (
     CONF_OAUTH_REFRESH_TOKEN,
     CONF_SAMSUNG_IOT_AUTH_SERVER,
     CONF_SAMSUNG_IOT_REFRESH_TOKEN,
+    CONF_SAMSUNG_LOGIN_ID,
+    CONF_SAMSUNG_PHYSICAL_ADDRESS,
+    CONF_SAMSUNG_USERAUTH_TOKEN,
     CONF_TOKEN,
     DOMAIN,
     SMARTTHINGS_DOMAIN,
@@ -80,6 +85,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hub = FamilyHub(hass, token=token, device_id=device_id)
 
     hub.set_image_token(entry.data.get(CONF_IMAGE_TOKEN))
+    _schedule_daily_samsung_renewal(hass, entry, hub)
 
     hass.data[DOMAIN][entry.entry_id] = entry
     hass.data[DOMAIN]["hub"] = hub
@@ -99,6 +105,55 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_register(DOMAIN, "refresh", _handle_refresh)
 
     return True
+
+
+SAMSUNG_IOT_RENEW_INTERVAL = timedelta(hours=24)
+
+
+async def _setup_samsung_iot(
+    hass: HomeAssistant, entry: ConfigEntry, hub: FamilyHub
+) -> None:
+    """Give the hub its Samsung IoT login (for pictures) and renew it once."""
+    hub.configure_samsung_iot(
+        refresh_token=entry.data.get(CONF_SAMSUNG_IOT_REFRESH_TOKEN),
+        auth_server=entry.data.get(
+            CONF_SAMSUNG_IOT_AUTH_SERVER, "https://us-auth2.samsungosp.com"
+        ),
+        entry=entry,
+        userauth_token=entry.data.get(CONF_SAMSUNG_USERAUTH_TOKEN),
+        login_id=entry.data.get(CONF_SAMSUNG_LOGIN_ID),
+        physical_address=entry.data.get(CONF_SAMSUNG_PHYSICAL_ADDRESS),
+    )
+    if not hub.has_samsung_iot:
+        return
+    try:
+        await hass.async_add_executor_job(hub.renew_samsung_iot)
+        _LOGGER.info("Samsung IoT token renewed for picture downloads")
+    except Exception as err:  # pylint: disable=broad-except
+        _LOGGER.warning(
+            "Could not renew the Samsung login used for pictures — picture "
+            "downloads will fail until resolved (will retry daily): %s",
+            err,
+        )
+
+
+def _schedule_daily_samsung_renewal(
+    hass: HomeAssistant, entry: ConfigEntry, hub: FamilyHub
+) -> None:
+    """Renew the Samsung login daily so its refresh token never sits unused."""
+    if not hub.has_samsung_iot:
+        return
+
+    async def _renew(_now=None) -> None:
+        try:
+            await hass.async_add_executor_job(hub.renew_samsung_iot)
+            _LOGGER.debug("Daily Samsung IoT token renewal succeeded")
+        except Exception as err:  # pylint: disable=broad-except
+            _LOGGER.warning("Daily Samsung login renewal failed: %s", err)
+
+    entry.async_on_unload(
+        async_track_time_interval(hass, _renew, SAMSUNG_IOT_RENEW_INTERVAL)
+    )
 
 
 async def _build_oauth_hub(
@@ -141,40 +196,7 @@ async def _build_oauth_hub(
     hub = FamilyHub(hass, token=token, device_id=device_id)
     hub.attach_oauth_session(session)
 
-    # Attach Samsung IoT token for client.smartthings.com image downloads.
-    # This is a separate token from the SmartThings API OAuth — it carries
-    # Samsung Account identity which the udo/file_links endpoint requires.
-    iot_refresh = entry.data.get(CONF_SAMSUNG_IOT_REFRESH_TOKEN)
-    iot_server = entry.data.get(
-        CONF_SAMSUNG_IOT_AUTH_SERVER, "https://us-auth2.samsungosp.com"
-    )
-    if iot_refresh:
-        try:
-            from .auth import refresh_samsung_iot_token
-
-            iot_creds = await hass.async_add_executor_job(
-                refresh_samsung_iot_token, iot_refresh, iot_server
-            )
-            hub.set_samsung_iot_token(
-                iot_creds.access_token,
-                refresh_token=iot_creds.refresh_token,
-                auth_server=iot_server,
-                entry=entry,
-            )
-            # Persist the new refresh token for next startup
-            if iot_creds.refresh_token != iot_refresh:
-                new_data = {
-                    **entry.data,
-                    CONF_SAMSUNG_IOT_REFRESH_TOKEN: iot_creds.refresh_token,
-                }
-                hass.config_entries.async_update_entry(entry, data=new_data)
-            _LOGGER.info("Samsung IoT token refreshed for image downloads")
-        except Exception as err:  # pylint: disable=broad-except
-            _LOGGER.warning(
-                "Could not refresh Samsung IoT token — image downloads "
-                "will fail until resolved: %s",
-                err,
-            )
+    await _setup_samsung_iot(hass, entry, hub)
 
     return hub
 
@@ -188,7 +210,7 @@ async def _build_standalone_oauth_hub(
     performs a token refresh to obtain a fresh access token, and persists the
     rotated refresh token back to the entry for next startup.
     """
-    from .auth import SmartThingsOAuth, refresh_samsung_iot_token
+    from .auth import SmartThingsOAuth
 
     client_id = entry.data.get(CONF_OAUTH_CLIENT_ID)
     client_secret = entry.data.get(CONF_OAUTH_CLIENT_SECRET)
@@ -215,34 +237,7 @@ async def _build_standalone_oauth_hub(
 
     hub = FamilyHub(hass, token=creds.access_token, device_id=device_id)
 
-    iot_refresh = entry.data.get(CONF_SAMSUNG_IOT_REFRESH_TOKEN)
-    iot_server = entry.data.get(
-        CONF_SAMSUNG_IOT_AUTH_SERVER, "https://us-auth2.samsungosp.com"
-    )
-    if iot_refresh:
-        try:
-            iot_creds = await hass.async_add_executor_job(
-                refresh_samsung_iot_token, iot_refresh, iot_server
-            )
-            hub.set_samsung_iot_token(
-                iot_creds.access_token,
-                refresh_token=iot_creds.refresh_token,
-                auth_server=iot_server,
-                entry=entry,
-            )
-            if iot_creds.refresh_token != iot_refresh:
-                new_data = {
-                    **entry.data,
-                    CONF_SAMSUNG_IOT_REFRESH_TOKEN: iot_creds.refresh_token,
-                }
-                hass.config_entries.async_update_entry(entry, data=new_data)
-            _LOGGER.info("Samsung IoT token refreshed for standalone OAuth entry")
-        except Exception as err:  # pylint: disable=broad-except
-            _LOGGER.warning(
-                "Could not refresh Samsung IoT token for standalone OAuth entry "
-                "— image downloads will fail until resolved: %s",
-                err,
-            )
+    await _setup_samsung_iot(hass, entry, hub)
 
     return hub
 

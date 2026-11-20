@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 from datetime import timedelta
 import json
 import logging
@@ -200,6 +201,9 @@ class FamilyHub:
         self._samsung_iot_headers: dict | None = None
         self._samsung_iot_refresh_token: str | None = None
         self._samsung_iot_auth_server: str = "https://us-auth2.samsungosp.com"
+        self._samsung_userauth_token: str | None = None
+        self._samsung_login_id: str | None = None
+        self._samsung_physical_address: str | None = None
         self._entry = None
         # Set when the image server refused our token for lack of a Samsung
         # Account identity; stops retrying every poll until reload.
@@ -370,14 +374,80 @@ class FamilyHub:
         except Exception:
             return False
 
+    def configure_samsung_iot(
+        self,
+        refresh_token: str | None,
+        auth_server: str | None = None,
+        entry=None,
+        userauth_token: str | None = None,
+        login_id: str | None = None,
+        physical_address: str | None = None,
+    ) -> None:
+        """Store what's needed to (re)new the Samsung IoT token.
+
+        ``userauth_token``/``login_id``/``physical_address`` are the backup
+        used if Samsung refuses the refresh token.
+        """
+        if refresh_token:
+            self._samsung_iot_refresh_token = refresh_token
+        if auth_server:
+            self._samsung_iot_auth_server = auth_server
+        if entry is not None:
+            self._entry = entry
+        self._samsung_userauth_token = userauth_token
+        self._samsung_login_id = login_id
+        self._samsung_physical_address = physical_address
+
+    @property
+    def has_samsung_iot(self) -> bool:
+        return bool(
+            self._samsung_iot_refresh_token
+            or getattr(self, "_samsung_userauth_token", None)
+        )
+
+    def renew_samsung_iot(self) -> None:
+        """Get a fresh Samsung IoT token (sync; run in an executor).
+
+        Used at start-up, once a day, and when Samsung rejects the current
+        token. Saves the rotated refresh token to the config entry.
+        """
+        self._do_samsung_iot_refresh()
+
+    def _persist_entry_data(self, updates: dict) -> None:
+        """Merge ``updates`` into the config entry, on HA's event loop."""
+        if self._entry is None:
+            return
+        entry = self._entry
+
+        def _apply() -> None:
+            self._hass.config_entries.async_update_entry(
+                entry, data={**entry.data, **updates}
+            )
+
+        loop = getattr(self._hass, "loop", None)
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if loop is not None and running is not loop:
+            # Called from an executor thread: hop onto the event loop.
+            loop.call_soon_threadsafe(_apply)
+        else:
+            _apply()
+
     def _do_samsung_iot_refresh(self) -> None:
-        """Refresh the Samsung IoT token in-place and persist the new refresh token."""
-        from .auth import refresh_samsung_iot_token
+        """Renew the Samsung IoT token in-place and persist the new refresh token."""
+        from .auth import renew_samsung_iot_token
 
         try:
-            iot_creds = refresh_samsung_iot_token(
+            iot_creds = renew_samsung_iot_token(
                 self._samsung_iot_refresh_token,
                 self._samsung_iot_auth_server,
+                userauth_token=getattr(self, "_samsung_userauth_token", None),
+                login_id=getattr(self, "_samsung_login_id", None) or "",
+                physical_address_text=getattr(
+                    self, "_samsung_physical_address", None
+                ),
             )
         except Exception as err:
             raise AuthenticationError(
@@ -390,14 +460,15 @@ class FamilyHub:
             auth_server=self._samsung_iot_auth_server,
             entry=self._entry,
         )
+        # Pictures can work again even if an earlier attempt gave up.
+        if self.images_unavailable_reason == "no_samsung_account":
+            self.images_unavailable_reason = None
 
-        if self._entry is not None:
-            from .const import CONF_SAMSUNG_IOT_REFRESH_TOKEN
-            new_data = {
-                **self._entry.data,
-                CONF_SAMSUNG_IOT_REFRESH_TOKEN: iot_creds.refresh_token,
-            }
-            self._hass.config_entries.async_update_entry(self._entry, data=new_data)
+        from .const import CONF_SAMSUNG_IOT_REFRESH_TOKEN
+
+        self._persist_entry_data(
+            {CONF_SAMSUNG_IOT_REFRESH_TOKEN: iot_creds.refresh_token}
+        )
 
     def attach_oauth_session(
         self, session: "config_entry_oauth2_flow.OAuth2Session"
@@ -541,7 +612,7 @@ class FamilyHub:
                         r.status_code == 400 and self._is_no_samsung_id_error(r)
                     )
                     if auth_fail:
-                        if not self._samsung_iot_refresh_token:
+                        if not self.has_samsung_iot:
                             raise AuthenticationError(
                                 f"Samsung IoT authentication failed "
                                 f"(HTTP {r.status_code}) — no refresh token available."

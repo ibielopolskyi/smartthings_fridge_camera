@@ -30,6 +30,9 @@ from .const import (
     CONF_OAUTH_REFRESH_TOKEN,
     CONF_SAMSUNG_IOT_AUTH_SERVER,
     CONF_SAMSUNG_IOT_REFRESH_TOKEN,
+    CONF_SAMSUNG_LOGIN_ID,
+    CONF_SAMSUNG_PHYSICAL_ADDRESS,
+    CONF_SAMSUNG_USERAUTH_TOKEN,
     CONF_SAMSUNG_SIGNIN_CLIENT_SECRET,
     CONF_TOKEN,
     DOMAIN,
@@ -148,7 +151,27 @@ async def _samsung_iot_login(
         raise SamsungLoginFailed from err
     data[CONF_SAMSUNG_IOT_REFRESH_TOKEN] = iot_creds.refresh_token
     data[CONF_SAMSUNG_IOT_AUTH_SERVER] = iot_creds.auth_server_url
+    data.update(
+        _samsung_backup_data(
+            getattr(samsung_auth, "userauth_token", None),
+            email,
+            getattr(samsung_auth, "_device_id", None),
+        )
+    )
     return data
+
+
+def _samsung_backup_data(
+    userauth_token: str | None, login_id: str | None, physical_address: str | None
+) -> dict[str, Any]:
+    """Entry data for renewing the IoT token if its refresh token is refused."""
+    if not isinstance(userauth_token, str) or not userauth_token:
+        return {}
+    return {
+        CONF_SAMSUNG_USERAUTH_TOKEN: userauth_token,
+        CONF_SAMSUNG_LOGIN_ID: login_id or "",
+        CONF_SAMSUNG_PHYSICAL_ADDRESS: physical_address or "",
+    }
 
 
 class InvalidImageToken(HomeAssistantError):
@@ -469,6 +492,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         **data,
                         CONF_SAMSUNG_IOT_REFRESH_TOKEN: creds.refresh_token,
                         CONF_SAMSUNG_IOT_AUTH_SERVER: creds.auth_server_url,
+                        **_samsung_backup_data(
+                            getattr(login, "userauth_token", None),
+                            getattr(login, "username", None),
+                            getattr(login, "device_id", None),
+                        ),
                     }
                     self._pending_entry = None
                     return self.async_create_entry(title=title, data=data)
