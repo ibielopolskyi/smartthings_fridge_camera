@@ -27,22 +27,24 @@
       },
       "standalone_oauth_samsung": {
         "title": "Standalone SmartThings OAuth — Samsung Account (optional)",
-        "description": "Optionally provide Samsung Account credentials to enable IoT camera features. Leave all fields empty to skip — the integration will work without live image downloads.\n\n{samsung_signin_client_secret_hint}",
+        "description": "Camera pictures need a Samsung identity. Fill in ONE of: a **picture token** (a SmartThings personal access token from https://account.smartthings.com/tokens; expires every 24 hours), or your **Samsung Account** login. Leave all fields empty to skip pictures.\n\n{samsung_signin_client_secret_hint}",
         "data": {
           "samsung_email": "Samsung Account email (optional)",
           "samsung_password": "Samsung Account password (optional)",
-          "samsung_signin_client_secret": "Samsung signin client secret (optional)"
+          "samsung_signin_client_secret": "Samsung signin client secret (optional)",
+          "image_token": "Picture token (optional): SmartThings personal access token"
         }
       },
       "oauth": {
         "title": "Reuse SmartThings OAuth credentials",
-        "description": "Select an existing HA core SmartThings integration to borrow its OAuth2 credentials. Tokens will refresh automatically.\n\nThe fridge is found automatically; enter its Device ID only if detection fails (find it at https://my.smartthings.com/advanced/devices).\n\nCamera images are served by a Samsung endpoint that needs a Samsung Account login. Enter your Samsung Account email and password to enable image downloads, or leave them empty to skip.",
+        "description": "Select an existing HA core SmartThings integration to borrow its OAuth2 credentials. Tokens will refresh automatically.\n\nThe fridge is found automatically; enter its Device ID only if detection fails (find it at https://my.smartthings.com/advanced/devices).\n\n**Camera pictures** come from a Samsung server that Home Assistant's SmartThings login can't use. To get pictures, fill in ONE of:\n- **Picture token**: create a token at https://account.smartthings.com/tokens (tick all Devices permissions). Easiest, but it expires after 24 hours and Home Assistant will then ask for a new one.\n- **Samsung Account** email + password (+ signin client secret). Renews itself, but Samsung may reject it.\n\nLeave all of them empty to set up without pictures.",
         "data": {
           "linked_smartthings_entry_id": "SmartThings integration",
           "device_id": "Device ID (optional)",
           "samsung_email": "Samsung Account email (optional)",
           "samsung_password": "Samsung Account password (optional)",
-          "samsung_signin_client_secret": "Samsung signin client secret (optional)"
+          "samsung_signin_client_secret": "Samsung signin client secret (optional)",
+          "image_token": "Picture token (optional): SmartThings personal access token"
         }
       },
       "pat": {
@@ -59,6 +61,13 @@
         "data": {
           "token": "New SmartThings Token"
         }
+      },
+      "reauth_image_token": {
+        "title": "New picture token needed",
+        "description": "The SmartThings personal access token used for camera pictures has expired (they last 24 hours). Create a new one at https://account.smartthings.com/tokens (tick all Devices permissions) and paste it here.",
+        "data": {
+          "image_token": "Picture token"
+        }
       }
     },
     "error": {
@@ -69,7 +78,8 @@
       "invalid_redirect_url": "No authorization code found in the URL. Check the URL and try again.",
       "code_exchange_failed": "Failed to exchange the authorization code. Check your credentials and try again.",
       "samsung_login_failed": "Samsung rejected the Samsung Account login, so camera pictures can't be enabled. This usually means the Samsung signin client secret is missing or wrong, or the account uses 2-step verification. Clear the three Samsung fields to finish setup without camera pictures; the log has Samsung's exact reply.",
-      "no_device_found": "No Family Hub fridge with a camera was found in this SmartThings account. Enter the fridge's Device ID manually."
+      "no_device_found": "No Family Hub fridge with a camera was found in this SmartThings account. Enter the fridge's Device ID manually.",
+      "invalid_image_token": "SmartThings rejected this token. Check you copied it fully and that it hasn't expired."
     },
     "abort": {
       "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",

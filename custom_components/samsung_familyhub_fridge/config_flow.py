@@ -13,7 +13,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_entry_oauth2_flow
 
-from .api import AuthenticationError, FamilyHub
+from .api import DEVICES_URL, AuthenticationError, FamilyHub
 from .auth import AuthError, SamsungAccountAuth, SmartThingsOAuth
 from .auth import SAMSUNG_LOGIN_CLIENT_ID
 from .const import (
@@ -22,6 +22,7 @@ from .const import (
     AUTH_MODE_STANDALONE_OAUTH,
     CONF_AUTH_MODE,
     CONF_DEVICE_ID,
+    CONF_IMAGE_TOKEN,
     CONF_LINKED_SMARTTHINGS_ENTRY_ID,
     CONF_OAUTH_CLIENT_ID,
     CONF_OAUTH_CLIENT_SECRET,
@@ -141,6 +142,40 @@ async def _samsung_iot_login(
     return data
 
 
+class InvalidImageToken(HomeAssistantError):
+    """The picture token was rejected by SmartThings."""
+
+
+async def _validate_image_token(hass: HomeAssistant, token: str) -> None:
+    """Check a picture token is a working SmartThings token."""
+
+    def _check() -> int:
+        return requests.get(
+            DEVICES_URL,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        ).status_code
+
+    try:
+        status = await hass.async_add_executor_job(_check)
+    except requests.RequestException as err:
+        raise CannotConnect from err
+    if status in (401, 403):
+        raise InvalidImageToken
+
+
+async def _image_token_data(
+    hass: HomeAssistant, user_input: dict[str, Any]
+) -> dict[str, Any]:
+    token = (user_input.get(CONF_IMAGE_TOKEN) or "").strip()
+    if not token:
+        return {}
+    await _validate_image_token(hass, token)
+    return {CONF_IMAGE_TOKEN: token}
+
+
+IMAGE_TOKEN_FIELD = {vol.Optional(CONF_IMAGE_TOKEN): str}
+
 SAMSUNG_FIELDS = {
     vol.Optional("samsung_email"): str,
     vol.Optional("samsung_password"): str,
@@ -197,11 +232,14 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     user_input[CONF_LINKED_SMARTTHINGS_ENTRY_ID],
                     (user_input.get(CONF_DEVICE_ID) or "").strip() or None,
                 )
+                data.update(await _image_token_data(self.hass, user_input))
                 data.update(await _samsung_iot_login(self.hass, user_input))
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
                 errors["base"] = "invalid_auth"
+            except InvalidImageToken:
+                errors[CONF_IMAGE_TOKEN] = "invalid_image_token"
             except SamsungLoginFailed:
                 errors["base"] = "samsung_login_failed"
             except Exception:  # pylint: disable=broad-except
@@ -219,6 +257,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             {
                 vol.Required(CONF_LINKED_SMARTTHINGS_ENTRY_ID): vol.In(options),
                 vol.Optional(CONF_DEVICE_ID): str,
+                **IMAGE_TOKEN_FIELD,
                 **SAMSUNG_FIELDS,
             }
         )
@@ -323,7 +362,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_OAUTH_REFRESH_TOKEN: self._standalone_refresh_token,
             }
             try:
+                data.update(await _image_token_data(self.hass, user_input))
                 data.update(await _samsung_iot_login(self.hass, user_input))
+            except InvalidImageToken:
+                errors[CONF_IMAGE_TOKEN] = "invalid_image_token"
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
             except SamsungLoginFailed:
                 errors["base"] = "samsung_login_failed"
             except Exception:  # pylint: disable=broad-except
@@ -335,7 +379,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     title="Samsung Fridge Camera (Standalone OAuth)", data=data
                 )
 
-        schema = vol.Schema(SAMSUNG_FIELDS)
+        schema = vol.Schema({**IMAGE_TOKEN_FIELD, **SAMSUNG_FIELDS})
         return self.async_show_form(
             step_id="standalone_oauth_samsung",
             data_schema=schema,
@@ -386,11 +430,47 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # refreshes transparently and any hard failure is surfaced on the
         # linked smartthings entry itself. If we do land here, offer both
         # paths again so the user can re-link.
+        # A picture token that expired is the common reauth cause for OAuth
+        # modes: ask for a new one rather than redoing the whole login.
+        if entry_data.get(CONF_IMAGE_TOKEN) and entry_data.get(CONF_AUTH_MODE) in (
+            AUTH_MODE_OAUTH,
+            AUTH_MODE_STANDALONE_OAUTH,
+        ):
+            return await self.async_step_reauth_image_token()
         if entry_data.get(CONF_AUTH_MODE) == AUTH_MODE_OAUTH:
             return await self.async_step_user()
         if entry_data.get(CONF_AUTH_MODE) == AUTH_MODE_STANDALONE_OAUTH:
             return await self.async_step_reauth_standalone_oauth()
         return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_image_token(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Ask for a new picture token (SmartThings PATs last 24 hours)."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            token = (user_input.get(CONF_IMAGE_TOKEN) or "").strip()
+            if not token:
+                errors[CONF_IMAGE_TOKEN] = "required"
+            else:
+                try:
+                    await _validate_image_token(self.hass, token)
+                except InvalidImageToken:
+                    errors[CONF_IMAGE_TOKEN] = "invalid_image_token"
+                except CannotConnect:
+                    errors["base"] = "cannot_connect"
+                else:
+                    reauth_entry = self._get_reauth_entry()
+                    return self.async_update_reload_and_abort(
+                        reauth_entry,
+                        data={**reauth_entry.data, CONF_IMAGE_TOKEN: token},
+                    )
+
+        return self.async_show_form(
+            step_id="reauth_image_token",
+            data_schema=vol.Schema({vol.Required(CONF_IMAGE_TOKEN): str}),
+            errors=errors,
+        )
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None

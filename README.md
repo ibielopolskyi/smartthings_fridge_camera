@@ -115,6 +115,17 @@ Search for the FamilyHub Integration you just downloaded and select it:
 You need to enter your Smartthings Token and your Device ID. The token is used to access your SmartThings account. The device ID identifies your fridge.</br>
 You can create a token from here: https://account.smartthings.com/tokens.</br>
 And get your device ID from here: https://my.smartthings.com/advanced/devices.</br>
+### Camera pictures
+
+If you already use Home Assistant's built-in SmartThings integration, pick **"Reuse HA core SmartThings OAuth"**. It renews its login by itself and finds the fridge automatically.
+
+That login cannot download the camera pictures: Samsung serves them from a server that needs a Samsung account identity. To get pictures, fill in **one** of these on the same screen:
+
+- **Picture token**: a personal access token from https://account.smartthings.com/tokens (tick all *Devices* permissions). Samsung makes these expire after 24 hours; when that happens Home Assistant shows a "re-authenticate" notice that only asks for a new token.
+- **Samsung Account** email + password (+ signin client secret). Renews itself, but Samsung may reject it (accounts with 2-step verification are not supported).
+
+If you leave both empty, the integration still works (door sensor, refresh), just without pictures.
+
 Click "Submit" to finish the setup:
 <p float="left">
   <img src="assets/config/config-step-4.png" width=1200  alt="config-step-4"/>

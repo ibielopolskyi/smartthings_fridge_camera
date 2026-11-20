@@ -275,3 +275,115 @@ async def test_coordinator_no_samsung_id_does_not_trigger_reauth():
         await coordinator._async_update_data()  # must not raise
     assert hub.images_unavailable_reason == "no_samsung_account"
     assert coordinator.last_file_ids == ["f1"]  # won't re-download every poll
+
+
+# ---------------------------------------------------------------------------
+# Picture token + public files fallback
+# ---------------------------------------------------------------------------
+
+VIEW_INSIDE = {"samsungce.viewInside": {"contents": {"value": [{"fileId": "f1"}]}}}
+FILE_LINKS = "https://client.smartthings.com/udo/file_links/f1"
+PUBLIC_FILE = "https://api.smartthings.com/v1/devices/fridge-1/files/f1"
+NO_SAMSUNG_ID = {"error": {"code": "BadRequestError",
+                           "message": "No samsung id available"}}
+
+
+def _image_hub():
+    hub = FamilyHub(_HomeAssistant(), token="oauth-tok", device_id="fridge-1")
+    hub.set_current_device_status(VIEW_INSIDE)
+    return hub
+
+
+def test_picture_token_is_used_for_downloads():
+    hub = _image_hub()
+    hub.set_image_token("pat-tok")
+    with rm.Mocker() as m:
+        m.get(FILE_LINKS, content=b"JPEG", headers={"content-type": "image/jpeg"})
+        assert hub.download_images() is True
+    assert m.last_request.headers["Authorization"] == "Bearer pat-tok"
+    assert hub.downloaded_images[0] == b"JPEG"
+
+
+def test_expired_picture_token_raises_image_token_expired():
+    from custom_components.samsung_familyhub_fridge.api import ImageTokenExpired
+
+    hub = _image_hub()
+    hub.set_image_token("old-pat")
+    with rm.Mocker() as m:
+        m.get(FILE_LINKS, status_code=401)
+        with pytest.raises(ImageTokenExpired):
+            hub.download_images()
+
+
+def test_public_files_fallback_used_when_it_works():
+    hub = _image_hub()
+    with rm.Mocker() as m:
+        m.get(FILE_LINKS, status_code=400, json=NO_SAMSUNG_ID)
+        m.get(PUBLIC_FILE, content=b"JPEG", headers={"content-type": "image/jpeg"})
+        assert hub.download_images() is True
+        assert hub.downloaded_images[0] == b"JPEG"
+        # Next time it goes straight to the public endpoint.
+        m.reset_mock()
+        hub.download_images()
+        assert [r.url.split("?")[0] for r in m.request_history] == [PUBLIC_FILE]
+
+
+def test_public_files_fallback_json_error_disables_images():
+    hub = _image_hub()
+    with rm.Mocker() as m:
+        m.get(FILE_LINKS, status_code=400, json=NO_SAMSUNG_ID)
+        m.get(PUBLIC_FILE, status_code=200, json={"error": "nope"})
+        assert hub.download_images() is False
+    assert hub.images_unavailable_reason == "no_samsung_account"
+
+
+@pytest.mark.asyncio
+async def test_oauth_step_stores_valid_picture_token():
+    flow = _make_flow()
+    with patch(f"{FLOW}._validate_oauth", AsyncMock(return_value=_validated())), \
+         rm.Mocker() as m:
+        m.get(DEVICES_URL, json={"items": []})
+        result = await flow.async_step_oauth(
+            user_input={
+                CONF_LINKED_SMARTTHINGS_ENTRY_ID: "st-entry",
+                "image_token": " pat-tok ",
+            }
+        )
+    assert result["type"] == "create_entry"
+    assert result["data"]["image_token"] == "pat-tok"
+    assert m.last_request.headers["Authorization"] == "Bearer pat-tok"
+
+
+@pytest.mark.asyncio
+async def test_oauth_step_rejects_bad_picture_token():
+    flow = _make_flow()
+    with patch(f"{FLOW}._validate_oauth", AsyncMock(return_value=_validated())), \
+         rm.Mocker() as m:
+        m.get(DEVICES_URL, status_code=401)
+        result = await flow.async_step_oauth(
+            user_input={
+                CONF_LINKED_SMARTTHINGS_ENTRY_ID: "st-entry",
+                "image_token": "bad",
+            }
+        )
+    assert result["errors"]["image_token"] == "invalid_image_token"
+
+
+@pytest.mark.asyncio
+async def test_reauth_with_picture_token_asks_only_for_new_token():
+    flow = _make_flow()
+    result = await flow.async_step_reauth(
+        {CONF_AUTH_MODE: AUTH_MODE_OAUTH, "image_token": "old"}
+    )
+    assert result["step_id"] == "reauth_image_token"
+
+    entry = MagicMock()
+    entry.data = {CONF_AUTH_MODE: AUTH_MODE_OAUTH, "image_token": "old"}
+    flow._get_reauth_entry = lambda: entry
+    flow.async_update_reload_and_abort = lambda e, data: {"type": "abort", "data": data}
+    with rm.Mocker() as m:
+        m.get(DEVICES_URL, json={"items": []})
+        result = await flow.async_step_reauth_image_token({"image_token": "new"})
+    assert result["type"] == "abort"
+    assert result["data"]["image_token"] == "new"
+    assert result["data"][CONF_AUTH_MODE] == AUTH_MODE_OAUTH
