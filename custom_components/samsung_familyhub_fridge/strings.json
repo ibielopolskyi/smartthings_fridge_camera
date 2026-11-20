@@ -73,7 +73,7 @@
       },
       "samsung_browser": {
         "title": "Sign in to your Samsung account",
-        "description": "1. On a computer, open Chrome or Edge, press **F12** and select the **Console** tab. Leave it open.\n2. In that same tab, open this link and sign in (including the SMS code if Samsung asks):\n\n[Open Samsung sign-in]({sign_in_url})\n\n3. After signing in, the page tries to open an address starting with **ms-app://** and nothing seems to happen. The Console shows a red message like *Failed to launch 'ms-app://…'*. Copy that whole message (or just the ms-app://… address) and paste it below.\n\nIf you don't see it in the Console, look in the **Network** tab (tick *Preserve log* and sign in again) for a request starting with ms-app://.\n\nThe link works once. If it fails, close this dialog and start setup again for a fresh link.",
+        "description": "1. On a computer, open Firefox, Chrome or Edge, press **F12** and select the **Console** tab. Leave it open.\n2. In that same tab, open this link and sign in (including the SMS code if Samsung asks):\n\n[Open Samsung sign-in]({sign_in_url})\n\n3. After signing in, the page tries to open an address starting with **ms-app://** and nothing seems to happen. The Console shows a red message mentioning the **ms-app://…** address. Copy that whole message (or just the ms-app://… address) and paste it below.\n\nIf you don't see it in the Console, look in the **Network** tab (tick *Preserve log* and sign in again) for a request starting with ms-app://.\n\nThe link works once. If it fails, close this dialog and start setup again for a fresh link.",
         "data": {
           "redirect_url": "ms-app://… address (or the whole Console message)"
         }
