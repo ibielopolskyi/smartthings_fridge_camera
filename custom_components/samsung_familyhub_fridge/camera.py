@@ -4,7 +4,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .api import FamilyHub
 
 
 async def async_setup_entry(
@@ -45,5 +44,5 @@ class FamilyHubCamera(Camera):
 
     @property
     def extra_state_attributes(self):
-        """Return the camera state attributes."""
-        return {}
+        """Samsung's details for this picture, e.g. when it was taken."""
+        return self.hub.photo_details(self._index)

@@ -60,7 +60,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.CAMERA, Platform.SENSOR]
+PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.CAMERA, Platform.SENSOR]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -97,9 +97,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _handle_refresh(call: ServiceCall) -> None:
         """Manually trigger a fridge camera refresh."""
         _LOGGER.info("Manual refresh requested — sending update_camera command")
-        await hub.async_ensure_fresh_token()
-        await hass.async_add_executor_job(hub.update_camera)
-        hub.should_update = False  # already sent the command
+        await hub.async_request_refresh()
         _LOGGER.info("Manual refresh command sent successfully")
 
     hass.services.async_register(DOMAIN, "refresh", _handle_refresh)
