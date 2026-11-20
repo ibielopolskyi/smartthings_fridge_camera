@@ -8,9 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import DataCoordinator
-from .const import DOMAIN
-from .entity import fridge_device_info
+from .entity import fridge_device_info, legacy_entity_id, runtime_data
 
 
 async def async_setup_entry(
@@ -18,9 +16,7 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator = hass.data[DOMAIN].get("coordinator") or DataCoordinator(
-        hass, hass.data[DOMAIN]["hub"]
-    )
+    coordinator = runtime_data(hass, config_entry)["coordinator"]
     async_add_entities([LastUpdatedAt(coordinator, config_entry)])
 
 
@@ -28,14 +24,19 @@ class LastUpdatedAt(CoordinatorEntity, SensorEntity):
     """When Home Assistant last downloaded new fridge pictures."""
 
     _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_has_entity_name = True
     _attr_icon = "mdi:image-refresh"
+    _attr_name = "Pictures downloaded"
 
-    def __init__(self, coordinator, config_entry=None):
+    def __init__(self, coordinator, config_entry):
         super().__init__(coordinator)
-        self._attr_name = "family_hub_pictures_downloaded"
-        if config_entry is not None:
-            self._attr_unique_id = f"{config_entry.entry_id}_pictures_downloaded"
-            self._attr_device_info = fridge_device_info(config_entry)
+        self._attr_unique_id = f"{config_entry.entry_id}_pictures_downloaded"
+        self._attr_device_info = fridge_device_info(config_entry)
+        legacy = legacy_entity_id(
+            config_entry, "sensor", "family_hub_pictures_downloaded"
+        )
+        if legacy:
+            self.entity_id = legacy
 
     @property
     def native_value(self) -> datetime | None:

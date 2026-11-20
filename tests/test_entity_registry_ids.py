@@ -21,7 +21,7 @@ def _entry():
 async def _setup(platform):
     hass = _HomeAssistant()
     coordinator = MagicMock(last_updated_at=None)
-    hass.data = {DOMAIN: {"hub": _hub(), "coordinator": coordinator}}
+    hass.data = {DOMAIN: {"entry-1": {"hub": _hub(), "coordinator": coordinator}}}
     added = []
     await platform.async_setup_entry(hass, _entry(), added.extend)
     return added, coordinator

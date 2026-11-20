@@ -87,25 +87,60 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hub.set_image_token(entry.data.get(CONF_IMAGE_TOKEN))
     _schedule_daily_samsung_renewal(hass, entry, hub)
 
-    hass.data[DOMAIN][entry.entry_id] = entry
-    hass.data[DOMAIN]["hub"] = hub
-    # One poller shared by the sensor and the cameras, so camera attributes
-    # (e.g. photo_taken_at) update as soon as new fridge status arrives.
-    hass.data[DOMAIN]["coordinator"] = DataCoordinator(hass, hub)
+    # Everything for this fridge lives under its own entry ID, so several
+    # fridges can run side by side. One poller per fridge is shared by its
+    # sensor and cameras, so camera attributes update with each poll.
+    hass.data[DOMAIN][entry.entry_id] = {
+        "entry": entry,
+        "hub": hub,
+        "coordinator": DataCoordinator(hass, hub, entry.title),
+    }
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    async def _handle_refresh(call: ServiceCall) -> None:
-        """Manually trigger a fridge camera refresh."""
-        _LOGGER.info("Manual refresh requested — sending update_camera command")
-        await hub.async_request_refresh()
-        _LOGGER.info("Manual refresh command sent successfully")
+    if not hass.services.has_service(DOMAIN, "refresh"):
 
-    hass.services.async_register(DOMAIN, "refresh", _handle_refresh)
+        async def _handle_refresh(call: ServiceCall) -> None:
+            """Refresh the chosen fridge(s), or every fridge if none chosen."""
+            targets = _refresh_targets(hass, call.data.get("device_id"))
+            if not targets:
+                _LOGGER.warning("Refresh: no matching Samsung Family Hub fridge")
+            for runtime in targets:
+                _LOGGER.info(
+                    "Manual refresh requested for %s", runtime["entry"].title
+                )
+                await runtime["hub"].async_request_refresh()
+
+        hass.services.async_register(DOMAIN, "refresh", _handle_refresh)
 
     return True
+
+
+def _loaded_fridges(hass: HomeAssistant) -> list[dict]:
+    return [
+        v for v in hass.data.get(DOMAIN, {}).values()
+        if isinstance(v, dict) and "hub" in v
+    ]
+
+
+def _refresh_targets(hass: HomeAssistant, device_ids) -> list[dict]:
+    """Map HA device IDs from the refresh action to loaded fridges."""
+    fridges = _loaded_fridges(hass)
+    if not device_ids:
+        return fridges
+    if isinstance(device_ids, str):
+        device_ids = [device_ids]
+    from homeassistant.helpers import device_registry as dr
+
+    registry = dr.async_get(hass)
+    entry_ids: set[str] = set()
+    for device_id in device_ids:
+        device = registry.async_get(device_id)
+        if device is not None:
+            entry_ids.update(device.config_entries)
+    return [f for f in fridges if f["entry"].entry_id in entry_ids]
 
 
 SAMSUNG_IOT_RENEW_INTERVAL = timedelta(hours=24)
@@ -245,7 +280,7 @@ async def _build_standalone_oauth_hub(
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Handle config entry updates (e.g. after re-authentication)."""
-    hub: FamilyHub = hass.data[DOMAIN]["hub"]
+    hub: FamilyHub = hass.data[DOMAIN][entry.entry_id]["hub"]
     hub.set_image_token(entry.data.get(CONF_IMAGE_TOKEN))
     auth_mode = entry.data.get(CONF_AUTH_MODE, AUTH_MODE_PAT)
     if auth_mode == AUTH_MODE_PAT:
@@ -283,12 +318,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id, None)
-        hass.data[DOMAIN].pop("hub", None)
-        hass.data[DOMAIN].pop("coordinator", None)
-        # Only deregister the service when no other entries remain
-        if not [
-            eid for eid in hass.data[DOMAIN] if eid not in ("hub", "coordinator")
-        ]:
+        # Only deregister the service when no other fridge remains
+        if not _loaded_fridges(hass):
             hass.services.async_remove(DOMAIN, "refresh")
 
     return unload_ok

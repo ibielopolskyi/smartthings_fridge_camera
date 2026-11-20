@@ -23,6 +23,7 @@ from .const import (
     AUTH_MODE_STANDALONE_OAUTH,
     CONF_AUTH_MODE,
     CONF_DEVICE_ID,
+    CONF_DEVICE_NAME,
     CONF_IMAGE_TOKEN,
     CONF_LINKED_SMARTTHINGS_ENTRY_ID,
     CONF_OAUTH_CLIENT_ID,
@@ -42,6 +43,9 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+# Temporary key carrying {device_id: name} from validation to the flow.
+FRIDGES_KEY = "_fridges"
+
 STEP_PAT_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_TOKEN): str,
@@ -60,9 +64,7 @@ async def _validate_pat(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, 
     except AuthenticationError as err:
         raise InvalidAuth from err
 
-    if not data.get(CONF_DEVICE_ID):
-        data[CONF_DEVICE_ID] = hub.device_id
-
+    data[FRIDGES_KEY] = hub.list_fridges()
     return data
 
 
@@ -98,8 +100,20 @@ async def _validate_oauth(
     return {
         CONF_AUTH_MODE: AUTH_MODE_OAUTH,
         CONF_LINKED_SMARTTHINGS_ENTRY_ID: smartthings_entry_id,
-        CONF_DEVICE_ID: device_id or hub.device_id,
+        CONF_DEVICE_ID: device_id,
+        FRIDGES_KEY: hub.list_fridges(),
     }
+
+
+async def _list_fridges_with_token(hass: HomeAssistant, token: str) -> dict[str, str]:
+    """Fridges visible to a SmartThings access token (empty on any error)."""
+    hub = FamilyHub(hass, token=token, device_id=None)
+    try:
+        await hub.authenticate()
+    except Exception as err:  # pylint: disable=broad-except
+        _LOGGER.warning("Could not list SmartThings fridges: %s", err)
+        return {}
+    return hub.list_fridges()
 
 
 class SamsungLoginFailed(HomeAssistantError):
@@ -283,16 +297,16 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception("Unexpected exception during OAuth validation")
                 errors["base"] = "unknown"
-            else:
-                if not data.get(CONF_DEVICE_ID):
-                    errors["base"] = "no_device_found"
             if not errors:
-                if user_input.get(CONF_SAMSUNG_BROWSER_LOGIN):
-                    self._pending_entry = ("Samsung Fridge Camera (OAuth)", data)
-                    return await self.async_step_samsung_browser()
-                return self.async_create_entry(
-                    title="Samsung Fridge Camera (OAuth)", data=data
+                self._remember_fridges(data)
+                result = await self._finish(
+                    "Samsung Fridge Camera (OAuth)",
+                    data,
+                    browser=bool(user_input.get(CONF_SAMSUNG_BROWSER_LOGIN)),
                 )
+                if result is not None:
+                    return result
+                errors["base"] = "no_device_found"
 
         schema = vol.Schema(
             {
@@ -381,6 +395,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 else:
                     self._standalone_access_token = creds.access_token
                     self._standalone_refresh_token = creds.refresh_token
+                    self._fridges = await _list_fridges_with_token(
+                        self.hass, creds.access_token
+                    )
                     return await self.async_step_standalone_oauth_samsung()
 
         schema = vol.Schema({"redirect_url_or_code": str})
@@ -420,11 +437,17 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
 
             if not errors:
-                title = "Samsung Fridge Camera (Standalone OAuth)"
-                if user_input.get(CONF_SAMSUNG_BROWSER_LOGIN):
-                    self._pending_entry = (title, data)
-                    return await self.async_step_samsung_browser()
-                return self.async_create_entry(title=title, data=data)
+                # If the fridge list couldn't be read, keep the old behaviour:
+                # the fridge is auto-detected when the integration starts.
+                result = await self._finish(
+                    "Samsung Fridge Camera (Standalone OAuth)",
+                    data,
+                    browser=bool(user_input.get(CONF_SAMSUNG_BROWSER_LOGIN)),
+                    allow_no_device=not getattr(self, "_fridges", None),
+                )
+                if result is not None:
+                    return result
+                errors["base"] = "no_device_found"
 
         schema = vol.Schema(
             {**BROWSER_LOGIN_FIELD, **IMAGE_TOKEN_FIELD, **SAMSUNG_FIELDS}
@@ -440,6 +463,89 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "Leave empty to skip Samsung IoT token acquisition."
                 )
             },
+        )
+
+    # ---------------- Choosing the fridge ----------------
+
+    def _remember_fridges(self, data: dict[str, Any]) -> None:
+        """Move the validator's fridge list out of the entry data."""
+        fridges = data.pop(FRIDGES_KEY, None)
+        if fridges is not None:
+            self._fridges = fridges
+
+    def _configured_device_ids(self) -> set[str]:
+        ids = set()
+        for entry in self._async_current_entries():
+            device_id = entry.data.get(CONF_DEVICE_ID)
+            if isinstance(device_id, str) and device_id:
+                ids.add(device_id)
+        return ids
+
+    async def _finish(
+        self,
+        title: str,
+        data: dict[str, Any],
+        browser: bool = False,
+        allow_no_device: bool = False,
+    ) -> FlowResult | None:
+        """Pick the fridge (asking if there are several), then create.
+
+        Returns None when the account has no fridge, so the caller can show
+        ``no_device_found`` on its form.
+        """
+        if not data.get(CONF_DEVICE_ID):
+            fridges = getattr(self, "_fridges", None) or {}
+            if not fridges:
+                if allow_no_device:
+                    return await self._create(title, data, browser)
+                return None
+            configured = self._configured_device_ids()
+            available = {k: v for k, v in fridges.items() if k not in configured}
+            if not available:
+                return self.async_abort(reason="already_configured")
+            if len(available) > 1:
+                self._pending_pick = (title, data, browser, available)
+                return await self.async_step_pick_fridge()
+            data[CONF_DEVICE_ID] = next(iter(available))
+        return await self._create(title, data, browser)
+
+    async def _create(
+        self, title: str, data: dict[str, Any], browser: bool
+    ) -> FlowResult:
+        """Create the entry for the chosen fridge (one entry per fridge)."""
+        device_id = data.get(CONF_DEVICE_ID)
+        if device_id:
+            if device_id in self._configured_device_ids():
+                return self.async_abort(reason="already_configured")
+            await self.async_set_unique_id(device_id)
+            self._abort_if_unique_id_configured()
+            name = (getattr(self, "_fridges", None) or {}).get(device_id)
+            # Entries with a fridge name get entity names from it.
+            data[CONF_DEVICE_NAME] = name or "Samsung Family Hub Fridge"
+            if name and name != device_id:
+                title = name
+        if browser:
+            self._pending_entry = (title, data)
+            return await self.async_step_samsung_browser()
+        return self.async_create_entry(title=title, data=data)
+
+    async def async_step_pick_fridge(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Several fridges in the account: let the user pick one."""
+        pending = getattr(self, "_pending_pick", None)
+        if pending is None:
+            return await self.async_step_user()
+        title, data, browser, available = pending
+        if user_input is not None and user_input.get(CONF_DEVICE_ID) in available:
+            self._pending_pick = None
+            data = {**data, CONF_DEVICE_ID: user_input[CONF_DEVICE_ID]}
+            return await self._create(title, data, browser)
+        return self.async_show_form(
+            step_id="pick_fridge",
+            data_schema=vol.Schema(
+                {vol.Required(CONF_DEVICE_ID): vol.In(available)}
+            ),
         )
 
     # ---------------- Samsung sign-in via Samsung's web page ----------------
@@ -527,9 +633,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
             else:
                 data = {**info, CONF_AUTH_MODE: AUTH_MODE_PAT}
-                return self.async_create_entry(
-                    title="Samsung Fridge Camera", data=data
-                )
+                self._remember_fridges(data)
+                result = await self._finish("Samsung Fridge Camera", data)
+                if result is not None:
+                    return result
+                errors["base"] = "no_device_found"
 
         return self.async_show_form(
             step_id="pat", data_schema=STEP_PAT_DATA_SCHEMA, errors=errors
@@ -601,6 +709,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
             try:
                 await _validate_pat(self.hass, new_data)
+                new_data.pop(FRIDGES_KEY, None)
             except InvalidAuth:
                 errors["base"] = "invalid_auth"
             except Exception:  # pylint: disable=broad-except

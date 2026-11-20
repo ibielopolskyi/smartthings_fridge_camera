@@ -60,7 +60,8 @@ def test_camera_attributes_come_from_hub():
     from custom_components.samsung_familyhub_fridge.camera import FamilyHubCamera
 
     coordinator = MagicMock()
-    cam = FamilyHubCamera("family_hub_top", 0, _hub(), coordinator)
+    entry = MagicMock(entry_id="entry-1", data={"device_id": "fridge-1"})
+    cam = FamilyHubCamera("family_hub_top", "Top", 0, _hub(), coordinator, entry)
     assert cam.coordinator is coordinator  # attributes refresh with each poll
     assert cam.extra_state_attributes["photo_taken_at"] == "2026-11-14T09:26:00Z"
 
@@ -74,7 +75,9 @@ async def test_refresh_button_sends_refresh_command():
     hub = _hub()
     hub.update_camera = MagicMock()
     hub.should_update = True
-    button = FamilyHubRefreshButton(hub, "entry-1")
+    button = FamilyHubRefreshButton(
+        hub, MagicMock(entry_id="entry-1", data={"device_id": "fridge-1"})
+    )
     assert button._attr_unique_id == "entry-1_refresh_pictures"
     await button.async_press()
     hub.update_camera.assert_called_once()
@@ -86,8 +89,8 @@ async def test_button_platform_setup_adds_button():
     from custom_components.samsung_familyhub_fridge.button import async_setup_entry
 
     hass = _HomeAssistant()
-    hass.data = {"samsung_familyhub_fridge": {"hub": _hub()}}
-    entry = MagicMock(entry_id="entry-1")
+    hass.data = {"samsung_familyhub_fridge": {"entry-1": {"hub": _hub()}}}
+    entry = MagicMock(entry_id="entry-1", data={"device_id": "fridge-1"})
     added = []
     await async_setup_entry(hass, entry, added.extend)
     assert len(added) == 1
