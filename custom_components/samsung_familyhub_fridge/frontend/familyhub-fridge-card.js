@@ -11,6 +11,7 @@
  */
 const DOMAIN = "samsung_familyhub_fridge";
 const SHELVES = ["top", "middle", "bottom"];
+const NOT_FOUND_GRACE_MS = 5000;
 
 function relativeTime(iso) {
   const then = Date.parse(iso);
@@ -144,6 +145,21 @@ class FamilyHubFridgeCard extends HTMLElement {
     if (!fridge) {
       const msg = document.createElement("div");
       msg.className = "missing";
+      // Right after the dashboard opens, Home Assistant's entity list can
+      // still be empty or incomplete. Show "loading" for a few seconds
+      // before concluding the fridge really isn't there.
+      if (!this._graceOver) {
+        msg.textContent = "Loading fridge…";
+        card.appendChild(msg);
+        if (!this._graceTimer) {
+          this._graceTimer = setTimeout(() => {
+            this._graceOver = true;
+            this._rendered = null;
+            this._render();
+          }, NOT_FOUND_GRACE_MS);
+        }
+        return;
+      }
       msg.textContent = this._config.device_id
         ? "That fridge wasn't found. Check the card's fridge setting."
         : "No Samsung Family Hub fridge found. Set up the Samsung FamilyHub Fridge integration first.";
