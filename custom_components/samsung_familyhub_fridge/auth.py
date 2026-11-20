@@ -295,7 +295,20 @@ class SamsungAccountAuth:
                 "Samsung Account login blocked. If 2FA is enabled, "
                 "use the browser-based OAuth flow instead."
             )
-        resp.raise_for_status()
+        if not resp.ok:
+            try:
+                body = resp.json()
+                detail = body.get("error_description") or body.get("error") or body
+            except ValueError:
+                detail = resp.text[:200]
+            _LOGGER.error(
+                "Samsung login request rejected (HTTP %s): %s",
+                resp.status_code,
+                detail,
+            )
+            raise AuthError(
+                f"Samsung Account login rejected (HTTP {resp.status_code}): {detail}"
+            )
 
         body = resp.json()
         token = body.get("userauth_token")

@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import requests
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -128,8 +129,12 @@ async def _samsung_iot_login(
     )
     try:
         iot_creds = await hass.async_add_executor_job(samsung_auth.login_iot)
-    except AuthError as err:
-        _LOGGER.warning("Samsung Account login failed: %s", err)
+    except (AuthError, requests.RequestException) as err:
+        _LOGGER.warning(
+            "Samsung Account login failed%s: %s",
+            "" if signin_client_secret else " (no signin client secret given)",
+            err,
+        )
         raise SamsungLoginFailed from err
     data[CONF_SAMSUNG_IOT_REFRESH_TOKEN] = iot_creds.refresh_token
     data[CONF_SAMSUNG_IOT_AUTH_SERVER] = iot_creds.auth_server_url
