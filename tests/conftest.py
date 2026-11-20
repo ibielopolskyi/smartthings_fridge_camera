@@ -229,6 +229,10 @@ class _SensorEntity:
     pass
 
 
+class _SensorDeviceClass:
+    TIMESTAMP = "timestamp"
+
+
 class _Camera:
     def __init__(self):
         pass
@@ -407,6 +411,7 @@ ha_components_sensor = _make_module(
     "homeassistant.components.sensor",
     PLATFORM_SCHEMA=MagicMock,
     SensorEntity=_SensorEntity,
+    SensorDeviceClass=_SensorDeviceClass,
 )
 ha_components_update = _make_module(
     "homeassistant.components.update",
