@@ -158,7 +158,7 @@ async def test_setup_schedules_daily_renewal_and_uses_backup():
         m.get(AUTHORIZE, json={"code": "IOT-CODE"})
 
         assert await async_setup_entry(hass, entry) is True
-        hub = hass.data["samsung_familyhub_fridge"]["hub"]
+        hub = hass.data["samsung_familyhub_fridge"]["e1"]["hub"]
         assert hub._samsung_iot_headers["Authorization"] == "Bearer A3"
 
         tracker.assert_called_once()

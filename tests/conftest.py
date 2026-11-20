@@ -169,6 +169,9 @@ class _ServiceRegistry:
     def async_remove(self, domain, service):
         self._services.pop((domain, service), None)
 
+    def has_service(self, domain, service):
+        return (domain, service) in self._services
+
 
 class _ServiceCall:
     def __init__(self, data=None):
@@ -189,9 +192,11 @@ class _HomeAssistant:
 class _ConfigEntry:
     """Minimal stub of homeassistant.config_entries.ConfigEntry."""
 
-    def __init__(self, entry_id="test", data=None):
+    def __init__(self, entry_id="test", data=None, unique_id=None, title=""):
         self.entry_id = entry_id
         self.data = data or {}
+        self.unique_id = unique_id
+        self.title = title
         self._update_listeners = []
 
     def add_update_listener(self, listener):
@@ -264,6 +269,14 @@ ha_core = _make_module(
     ServiceCall=_ServiceCall,
     callback=lambda f: f,
 )
+class _AbortFlow(Exception):
+    """Stand-in for data_entry_flow.AbortFlow."""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
 class _ConfigFlowBase:
     """Stub base class for config_entries.ConfigFlow.
 
@@ -292,6 +305,23 @@ class _ConfigFlowBase:
 
     def async_abort(self, *, reason):
         return {"type": "abort", "reason": reason}
+
+    async def async_set_unique_id(self, unique_id=None, **kwargs):
+        self.unique_id = unique_id
+
+    def _async_current_entries(self, include_ignore=None):
+        try:
+            entries = self.hass.config_entries.async_entries(
+                "samsung_familyhub_fridge"
+            )
+            return [e for e in entries if isinstance(e, _ConfigEntry)]
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _abort_if_unique_id_configured(self):
+        for entry in self._async_current_entries():
+            if getattr(entry, "unique_id", None) == getattr(self, "unique_id", None):
+                raise _AbortFlow("already_configured")
 
     def async_update_reload_and_abort(self, entry, *, data):
         return {"type": "abort", "reason": "reauth_successful"}
@@ -330,6 +360,10 @@ ha_helpers_update_coordinator = _make_module(
     DataUpdateCoordinator=_DataUpdateCoordinator,
     CoordinatorEntity=_CoordinatorEntity,
     UpdateFailed=Exception,
+)
+ha_helpers_device_registry = _make_module(
+    "homeassistant.helpers.device_registry",
+    async_get=MagicMock(),
 )
 ha_helpers_event = _make_module(
     "homeassistant.helpers.event",
@@ -432,6 +466,7 @@ _modules = {
     "homeassistant.helpers.update_coordinator": ha_helpers_update_coordinator,
     "homeassistant.helpers.entity_platform": ha_helpers_entity_platform,
     "homeassistant.helpers.event": ha_helpers_event,
+    "homeassistant.helpers.device_registry": ha_helpers_device_registry,
     "homeassistant.helpers.dispatcher": ha_helpers_dispatcher,
     "homeassistant.helpers.typing": ha_helpers_typing,
     "homeassistant.helpers.config_entry_oauth2_flow": ha_helpers_oauth2,

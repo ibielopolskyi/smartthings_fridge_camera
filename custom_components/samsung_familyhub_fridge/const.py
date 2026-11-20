@@ -8,6 +8,9 @@ DEFAULT_TIMEOUT = 10
 CONF_AUTH_MODE = "auth_mode"
 CONF_TOKEN = "token"
 CONF_DEVICE_ID = "device_id"
+# Fridge's name in SmartThings; also marks entries created with
+# multi-fridge support (older entries keep their legacy entity IDs).
+CONF_DEVICE_NAME = "device_name"
 CONF_LINKED_SMARTTHINGS_ENTRY_ID = "linked_smartthings_entry_id"
 CONF_SAMSUNG_IOT_REFRESH_TOKEN = "samsung_iot_refresh_token"
 CONF_SAMSUNG_IOT_AUTH_SERVER = "samsung_iot_auth_server"

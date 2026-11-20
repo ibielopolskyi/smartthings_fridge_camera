@@ -1,7 +1,17 @@
 refresh:
   name: Refresh camera
   description: >
-    Ask the Samsung Family Hub fridge to republish its latest camera photos
-    (same as the "Refresh pictures" button). The fridge takes new photos
-    itself when the door closes; this does not take a new photo, but makes
-    sure Home Assistant has the latest ones.
+    Ask Samsung Family Hub fridges to republish their latest camera photos
+    (same as each fridge's "Refresh pictures" button). Leave the fridge empty
+    to refresh every fridge. The fridge takes new photos itself when the door
+    closes; this does not take a new photo, but makes sure Home Assistant has
+    the latest ones.
+  fields:
+    device_id:
+      name: Fridge
+      description: Fridge(s) to refresh. Leave empty for all fridges.
+      required: false
+      selector:
+        device:
+          integration: samsung_familyhub_fridge
+          multiple: true

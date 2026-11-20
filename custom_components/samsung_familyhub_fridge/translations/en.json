@@ -1,7 +1,7 @@
 {
     "config": {
         "abort": {
-            "already_configured": "Device is already configured",
+            "already_configured": "This fridge is already set up (every fridge in this account is). Add another fridge to SmartThings first, or remove the existing entry.",
             "reauth_successful": "Re-authentication was successful",
             "samsung_browser_unavailable": "Couldn't reach Samsung's sign-in service. Check the log and try again."
         },
@@ -95,6 +95,13 @@
                 "description": "1. On a computer, open Firefox, Chrome or Edge, press **F12** and select the **Console** tab. Leave it open.\n2. In that same tab, open this link and sign in (including the SMS code if Samsung asks):\n\n[Open Samsung sign-in]({sign_in_url})\n\n3. After signing in, the page tries to open an address starting with **ms-app://** and nothing seems to happen. The Console shows a red message mentioning the **ms-app://…** address. Copy that whole message (or just the ms-app://… address) and paste it below.\n\nIf you don't see it in the Console, look in the **Network** tab (tick *Preserve log* and sign in again) for a request starting with ms-app://.\n\nThe link works once. If it fails, close this dialog and start setup again for a fresh link.",
                 "data": {
                     "redirect_url": "ms-app://… address (or the whole Console message)"
+                }
+            },
+            "pick_fridge": {
+                "title": "Choose your fridge",
+                "description": "This SmartThings account has several Family Hub fridges. Pick the one to add; add the integration again for each other fridge.",
+                "data": {
+                    "device_id": "Fridge"
                 }
             }
         }

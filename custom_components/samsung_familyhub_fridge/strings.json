@@ -77,6 +77,13 @@
         "data": {
           "redirect_url": "ms-app://… address (or the whole Console message)"
         }
+      },
+      "pick_fridge": {
+        "title": "Choose your fridge",
+        "description": "This SmartThings account has several Family Hub fridges. Pick the one to add; add the integration again for each other fridge.",
+        "data": {
+          "device_id": "Fridge"
+        }
       }
     },
     "error": {
@@ -94,7 +101,7 @@
       "samsung_browser_failed": "Samsung didn't accept the sign-in result. Start setup again for a fresh link; if it keeps failing, check the log for Samsung's reply."
     },
     "abort": {
-      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
+      "already_configured": "This fridge is already set up (every fridge in this account is). Add another fridge to SmartThings first, or remove the existing entry.",
       "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]",
       "samsung_browser_unavailable": "Couldn't reach Samsung's sign-in service. Check the log and try again."
     }

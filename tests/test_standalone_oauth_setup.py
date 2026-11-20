@@ -89,7 +89,7 @@ async def test_setup_entry_standalone_oauth_refreshes_token(requests_mock):
     result = await async_setup_entry(hass, entry)
 
     assert result is True
-    hub = hass.data[DOMAIN]["hub"]
+    hub = hass.data[DOMAIN][entry.entry_id]["hub"]
     assert hub.token == "fresh-access-token", (
         f"Expected hub.token='fresh-access-token', got {hub.token!r}"
     )
@@ -142,7 +142,7 @@ async def test_setup_entry_standalone_oauth_with_samsung_iot(requests_mock):
     result = await async_setup_entry(hass, entry)
 
     assert result is True
-    hub = hass.data[DOMAIN]["hub"]
+    hub = hass.data[DOMAIN][entry.entry_id]["hub"]
     assert hub.token == "fresh-st-access-token"
     assert hub._samsung_iot_headers is not None, (
         "Expected hub._samsung_iot_headers to be set after IoT token refresh"

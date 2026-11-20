@@ -82,11 +82,13 @@ class ImageTokenExpired(AuthenticationError):
 
 
 class DataCoordinator(DataUpdateCoordinator):
-    def __init__(self, hass: HomeAssistant, api: FamilyHub):
+    def __init__(
+        self, hass: HomeAssistant, api: FamilyHub, device_label: str | None = None
+    ):
         super().__init__(
             hass,
             _LOGGER,
-            name="File ID refresher",
+            name=f"File ID refresher ({device_label or api._device_id or 'fridge'})",
             update_interval=timedelta(seconds=10),
         )
         self._hass = hass
@@ -884,6 +886,32 @@ class FamilyHub:
                 "samsungce.viewInside data not available in device status"
             )
             return []
+
+    def list_fridges(self) -> dict[str, str]:
+        """All Family Hub fridges (with cameras) in the account: id → name."""
+        fridges: dict[str, str] = {}
+        try:
+            items = (self._device_status or {}).get("items") or []
+        except AttributeError:
+            return fridges
+        for element in items:
+            if not isinstance(element, dict):
+                continue
+            device_id = element.get("deviceId")
+            if not device_id:
+                continue
+            # Legacy private-endpoint format: one row per attribute.
+            if element.get("capabilityId") == VIEW_INSIDE_CAPABILITY:
+                fridges.setdefault(device_id, device_id)
+                continue
+            for component in element.get("components") or []:
+                caps = component.get("capabilities") or []
+                if any(c.get("id") == VIEW_INSIDE_CAPABILITY for c in caps):
+                    fridges[device_id] = (
+                        element.get("label") or element.get("name") or device_id
+                    )
+                    break
+        return fridges
 
     def set_device_id(self):
         """Extract device ID from the device status list."""

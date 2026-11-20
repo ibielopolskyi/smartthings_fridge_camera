@@ -127,6 +127,10 @@ That login cannot download the camera pictures: Samsung serves them from a serve
 
 If you leave both empty, the integration still works (door sensor, refresh), just without pictures.
 
+### Several fridges
+
+Add the integration once per fridge. If your SmartThings account has more than one Family Hub, setup asks which one to add and skips fridges that are already set up. Each fridge gets its own device with its own cameras, sensor and **Refresh pictures** button, named after the fridge in SmartThings (for example `camera.kitchen_fridge_top`). Fridges added with earlier versions keep their existing entity IDs (`camera.family_hub_top`, ...). The `samsung_familyhub_fridge.refresh` action refreshes the fridge(s) you pick, or all of them if you leave it empty.
+
 Click "Submit" to finish the setup:
 <p float="left">
   <img src="assets/config/config-step-4.png" width=1200  alt="config-step-4"/>
