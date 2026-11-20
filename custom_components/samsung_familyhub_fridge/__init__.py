@@ -26,7 +26,9 @@ load via `async_migrate_entry`.
 from __future__ import annotations
 
 from datetime import timedelta
+import hashlib
 import logging
+from pathlib import Path
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -34,6 +36,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_entry_oauth2_flow
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_time_interval
 
 from .api import DataCoordinator, FamilyHub
@@ -61,6 +64,41 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.CAMERA, Platform.SENSOR]
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+CARD_FILENAME = "familyhub-fridge-card.js"
+CARD_URL = f"/{DOMAIN}/{CARD_FILENAME}"
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Serve the Family Hub Fridge dashboard card and load it in the frontend."""
+    await _async_register_card(hass)
+    return True
+
+
+async def _async_register_card(hass: HomeAssistant) -> None:
+    """Make 'custom:familyhub-fridge-card' available with no manual resource."""
+    if getattr(hass, "http", None) is None:
+        return
+    path = Path(__file__).parent / "frontend" / CARD_FILENAME
+    try:
+        from homeassistant.components.frontend import add_extra_js_url
+        from homeassistant.components.http import StaticPathConfig
+
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig(CARD_URL, str(path), False)]
+        )
+        version = await hass.async_add_executor_job(_card_version, path)
+        add_extra_js_url(hass, f"{CARD_URL}?v={version}")
+    except Exception as err:  # pylint: disable=broad-except
+        # The integration works without the card; never fail setup over it.
+        _LOGGER.warning("Could not register the Family Hub Fridge card: %s", err)
+
+
+def _card_version(path: Path) -> str:
+    """Short content hash so browsers fetch the card again after updates."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:10]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

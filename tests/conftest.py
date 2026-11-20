@@ -361,6 +361,18 @@ ha_helpers_update_coordinator = _make_module(
     CoordinatorEntity=_CoordinatorEntity,
     UpdateFailed=Exception,
 )
+ha_helpers_config_validation = _make_module(
+    "homeassistant.helpers.config_validation",
+    config_entry_only_config_schema=lambda domain: MagicMock(),
+)
+ha_components_http = _make_module(
+    "homeassistant.components.http",
+    StaticPathConfig=lambda url, path, cache: (url, path, cache),
+)
+ha_components_frontend = _make_module(
+    "homeassistant.components.frontend",
+    add_extra_js_url=MagicMock(),
+)
 ha_helpers_device_registry = _make_module(
     "homeassistant.helpers.device_registry",
     async_get=MagicMock(),
@@ -467,6 +479,9 @@ _modules = {
     "homeassistant.helpers.entity_platform": ha_helpers_entity_platform,
     "homeassistant.helpers.event": ha_helpers_event,
     "homeassistant.helpers.device_registry": ha_helpers_device_registry,
+    "homeassistant.helpers.config_validation": ha_helpers_config_validation,
+    "homeassistant.components.http": ha_components_http,
+    "homeassistant.components.frontend": ha_components_frontend,
     "homeassistant.helpers.dispatcher": ha_helpers_dispatcher,
     "homeassistant.helpers.typing": ha_helpers_typing,
     "homeassistant.helpers.config_entry_oauth2_flow": ha_helpers_oauth2,
