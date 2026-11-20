@@ -63,8 +63,16 @@ def camera_related_status(full_status: dict) -> dict:
     for comp_name, caps in components.items():
         if not isinstance(caps, dict):
             continue
+        camera_component = bool(CAMERA_KEYWORDS.search(comp_name))
         for cap_name, attrs in caps.items():
-            if CAMERA_KEYWORDS.search(cap_name):
+            # Everything in a camera component (e.g. camera-01's on/off
+            # switch), camera-looking capabilities, and every door sensor
+            # (photos are taken when a door closes).
+            if (
+                camera_component
+                or CAMERA_KEYWORDS.search(cap_name)
+                or cap_name == "contactSensor"
+            ):
                 found[f"{comp_name}/{cap_name}"] = attrs
     return found
 
@@ -825,6 +833,44 @@ class FamilyHub:
             self.should_update = True
             if first_poll:
                 _LOGGER.debug("First poll after startup — requesting camera refresh")
+
+    async def async_request_refresh(self) -> None:
+        """Send the fridge's camera refresh command (button / service).
+
+        The fridge photographs the shelves when the door closes; this asks it
+        to republish its latest photos, which the coordinator then downloads.
+        """
+        await self.async_ensure_fresh_token()
+        await self._hass.async_add_executor_job(self.update_camera)
+        self.should_update = False
+
+    def photo_details(self, index: int) -> dict:
+        """Samsung's metadata for one picture, for the camera's attributes."""
+        try:
+            view = self._current_device_status["samsungce.viewInside"]
+        except (KeyError, TypeError):
+            return {}
+        details: dict = {}
+        taken = (view.get("lastUpdatedTime") or {}).get("value")
+        if taken:
+            details["photo_taken_at"] = taken
+        contents = view.get("contents") or {}
+        if contents.get("timestamp"):
+            details["links_issued_at"] = contents["timestamp"]
+        items = contents.get("value") or []
+        if 0 <= index < len(items) and isinstance(items[index], dict):
+            item = items[index]
+            if item.get("focusArea"):
+                details["focus_area"] = item["focusArea"]
+            if item.get("expiredTime"):
+                details["link_expires_at"] = item["expiredTime"]
+        size = jpeg_size(
+            self.downloaded_images[index]
+            if index < len(self.downloaded_images) else None
+        )
+        if size:
+            details["width"], details["height"] = size
+        return details
 
     def get_file_ids(self):
         """Get the file IDs for the camera images."""

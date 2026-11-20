@@ -40,8 +40,13 @@ def test_camera_related_status_searches_all_components():
         "cooler": {"custom.fridgeMode": {}},
         "hub": {"imageCapture": {"image": {"value": "x"}}},
     }}
+    full["components"]["camera-01"] = {"switch": {"switch": {"value": "off"}}}
+    full["components"]["cooler"]["contactSensor"] = {"contact": {"value": "closed"}}
     found = camera_related_status(full)
-    assert set(found) == {"main/samsungce.viewInside", "hub/imageCapture"}
+    assert set(found) == {
+        "main/samsungce.viewInside", "main/contactSensor", "hub/imageCapture",
+        "camera-01/switch", "cooler/contactSensor",
+    }
 
 
 def test_log_camera_details_logs_components(caplog):

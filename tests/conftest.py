@@ -247,6 +247,7 @@ class _UpdateEntityFeature:
 
 
 class _Platform:
+    BUTTON = "button"
     CAMERA = "camera"
     SENSOR = "sensor"
 
@@ -394,6 +395,14 @@ ha_components_local_file_camera = _make_module(
     "homeassistant.components.local_file.camera",
     LocalFile=MagicMock,
 )
+class _ButtonEntity:
+    pass
+
+
+ha_components_button = _make_module(
+    "homeassistant.components.button",
+    ButtonEntity=_ButtonEntity,
+)
 ha_components_sensor = _make_module(
     "homeassistant.components.sensor",
     PLATFORM_SCHEMA=MagicMock,
@@ -426,6 +435,7 @@ _modules = {
     "homeassistant.components.local_file": ha_components_local_file,
     "homeassistant.components.local_file.camera": ha_components_local_file_camera,
     "homeassistant.components.sensor": ha_components_sensor,
+    "homeassistant.components.button": ha_components_button,
     "homeassistant.components.update": ha_components_update,
 }
 
