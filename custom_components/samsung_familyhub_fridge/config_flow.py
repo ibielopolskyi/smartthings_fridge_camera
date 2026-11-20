@@ -102,6 +102,10 @@ class SamsungLoginFailed(HomeAssistantError):
     """Samsung Account login failed (bad credentials, 2FA, ...)."""
 
 
+class SamsungTwoFactorRequired(SamsungLoginFailed):
+    """Samsung accepted the password but wants a 2-step verification code."""
+
+
 async def _samsung_iot_login(
     hass: HomeAssistant, user_input: dict[str, Any]
 ) -> dict[str, Any]:
@@ -138,6 +142,8 @@ async def _samsung_iot_login(
             "" if signin_client_secret else " (no signin client secret given)",
             err,
         )
+        if "2factor" in str(err).lower() or "2-step" in str(err).lower():
+            raise SamsungTwoFactorRequired from err
         raise SamsungLoginFailed from err
     data[CONF_SAMSUNG_IOT_REFRESH_TOKEN] = iot_creds.refresh_token
     data[CONF_SAMSUNG_IOT_AUTH_SERVER] = iot_creds.auth_server_url
@@ -242,6 +248,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "invalid_auth"
             except InvalidImageToken:
                 errors[CONF_IMAGE_TOKEN] = "invalid_image_token"
+            except SamsungTwoFactorRequired:
+                errors["base"] = "samsung_2fa_required"
             except SamsungLoginFailed:
                 errors["base"] = "samsung_login_failed"
             except Exception:  # pylint: disable=broad-except
@@ -370,6 +378,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors[CONF_IMAGE_TOKEN] = "invalid_image_token"
             except CannotConnect:
                 errors["base"] = "cannot_connect"
+            except SamsungTwoFactorRequired:
+                errors["base"] = "samsung_2fa_required"
             except SamsungLoginFailed:
                 errors["base"] = "samsung_login_failed"
             except Exception:  # pylint: disable=broad-except

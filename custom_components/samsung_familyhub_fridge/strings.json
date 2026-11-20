@@ -79,7 +79,8 @@
       "code_exchange_failed": "Failed to exchange the authorization code. Check your credentials and try again.",
       "samsung_login_failed": "Samsung rejected the Samsung Account login, so camera pictures can't be enabled. This usually means the Samsung signin client secret is missing or wrong, or the account uses 2-step verification. Clear the three Samsung fields to finish setup without camera pictures; the log has Samsung's exact reply.",
       "no_device_found": "No Family Hub fridge with a camera was found in this SmartThings account. Enter the fridge's Device ID manually.",
-      "invalid_image_token": "SmartThings rejected this token. Check you copied it fully and that it hasn't expired."
+      "invalid_image_token": "SmartThings rejected this token. Check you copied it fully and that it hasn't expired.",
+      "samsung_2fa_required": "Samsung accepted your password but wants a 2-step verification (SMS) code, which this login can't enter. Turn off 2-step verification in your Samsung account, set up this integration, then turn it back on; or clear the Samsung fields to set up without camera pictures."
     },
     "abort": {
       "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
