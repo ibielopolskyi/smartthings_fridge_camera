@@ -27,6 +27,10 @@ class AuthenticationError(Exception):
     """Raised when SmartThings API returns an authentication error (401/403)."""
 
 
+class ImageTokenExpired(AuthenticationError):
+    """The picture-only SmartThings token was rejected (expired/revoked)."""
+
+
 class DataCoordinator(DataUpdateCoordinator):
     def __init__(self, hass: HomeAssistant, api: FamilyHub):
         super().__init__(
@@ -134,6 +138,10 @@ class FamilyHub:
         # Set when the image server refused our token for lack of a Samsung
         # Account identity; stops retrying every poll until reload.
         self.images_unavailable_reason: str | None = None
+        # Optional SmartThings PAT used only for image downloads.
+        self._image_headers: dict | None = None
+        # Set once the public files endpoint is confirmed to work.
+        self._use_public_files_api = False
 
     def set_samsung_iot_token(
         self,
@@ -160,6 +168,64 @@ class FamilyHub:
             self._samsung_iot_auth_server = auth_server
         if entry is not None:
             self._entry = entry
+
+    def set_image_token(self, token: str | None) -> None:
+        """Use a SmartThings personal access token only for picture downloads."""
+        token = (token or "").strip()
+        self._image_headers = (
+            {"Authorization": f"Bearer {token}"} if token else None
+        )
+        # A new token deserves a fresh attempt.
+        if self.images_unavailable_reason == "image_token_no_samsung_id":
+            self.images_unavailable_reason = None
+
+    def _public_file_request(self, file_id: str) -> tuple[str, dict]:
+        url = (
+            f"https://api.smartthings.com/v1/devices/"
+            f"{self.device_id}/files/{file_id}"
+        )
+        headers = {
+            **self._headers,
+            "Accept": "image/jpeg, image/*, application/octet-stream, */*",
+        }
+        return url, headers
+
+    def _probe_public_files_api(self, file_id: str):
+        """Try the public files endpoint once with the SmartThings token.
+
+        Returns the successful response (and remembers to use this endpoint
+        from now on), or None after marking images unavailable with a log
+        message that includes the server's reply.
+        """
+        url, headers = self._public_file_request(file_id)
+        try:
+            r = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
+        except requests.RequestException as err:
+            r = None
+            reply = str(err)
+        else:
+            content_type = r.headers.get("content-type", "")
+            looks_like_json = content_type.startswith(
+                "application/json"
+            ) or r.content[:1] in (b"{", b"[")
+            if r.ok and r.content and not looks_like_json:
+                _LOGGER.info(
+                    "Camera images: using the public SmartThings files endpoint"
+                )
+                self._use_public_files_api = True
+                return r
+            reply = f"HTTP {r.status_code} {content_type}: {r.text[:200]}"
+        self.images_unavailable_reason = "no_samsung_account"
+        _LOGGER.warning(
+            "Camera images unavailable: the image server needs a Samsung ID "
+            "(\"No samsung id available\") and the public files endpoint did "
+            "not return an image (%s). The SmartThings connection itself is "
+            "working. To get images, add a picture token (a SmartThings "
+            "personal access token) or Samsung Account login to this "
+            "integration.",
+            reply,
+        )
+        return None
 
     def _is_no_samsung_id_error(self, response: requests.Response) -> bool:
         """Return True if response body contains 'No samsung id' (400 auth error)."""
@@ -307,13 +373,17 @@ class FamilyHub:
                     f"https://client.smartthings.com/udo/file_links/"
                     f"{file_id}?cid={CID}&di={self.device_id}"
                 )
-                # Use Samsung IoT token if available (OAuth mode);
-                # otherwise use the main token (PAT mode).
-                dl_headers = (
-                    self._samsung_iot_headers
-                    if self._samsung_iot_headers
-                    else self._headers
-                )
+                if self._use_public_files_api:
+                    url, dl_headers = self._public_file_request(file_id)
+                elif self._samsung_iot_headers:
+                    # Samsung Account IoT token (email/password login).
+                    dl_headers = self._samsung_iot_headers
+                elif self._image_headers:
+                    # Picture token: a SmartThings PAT, which carries the
+                    # Samsung ID the image server wants.
+                    dl_headers = self._image_headers
+                else:
+                    dl_headers = self._headers
                 r = requests.get(
                     url,
                     headers=dl_headers,
@@ -339,23 +409,40 @@ class FamilyHub:
                             headers=self._samsung_iot_headers,
                             timeout=DEFAULT_TIMEOUT,
                         )
-                if (
-                    dl_headers is not self._samsung_iot_headers
+                elif dl_headers is self._image_headers:
+                    if r.status_code in (401, 403):
+                        _LOGGER.error(
+                            "Picture token rejected (HTTP %s) — it has probably "
+                            "expired (SmartThings personal tokens last 24 hours). "
+                            "Home Assistant will ask for a new one.",
+                            r.status_code,
+                        )
+                        raise ImageTokenExpired(
+                            f"Picture token rejected (HTTP {r.status_code}); "
+                            "enter a new SmartThings personal access token."
+                        )
+                    if r.status_code == 400 and self._is_no_samsung_id_error(r):
+                        self.images_unavailable_reason = "image_token_no_samsung_id"
+                        _LOGGER.warning(
+                            "Camera images unavailable: the picture token was "
+                            "accepted but has no Samsung ID (\"No samsung id "
+                            "available\"). Create the token at "
+                            "https://account.smartthings.com/tokens while "
+                            "signed in with your Samsung account."
+                        )
+                        return False
+                elif (
+                    dl_headers is self._headers
                     and r.status_code == 400
                     and self._is_no_samsung_id_error(r)
                 ):
                     # The SmartThings token is fine; the image server just
-                    # needs a Samsung Account login. Re-authenticating the
-                    # SmartThings token would not help, so don't trigger reauth.
-                    self.images_unavailable_reason = "no_samsung_account"
-                    _LOGGER.warning(
-                        "Camera images unavailable: the image server needs a "
-                        "Samsung Account login (\"No samsung id available\"). "
-                        "The SmartThings connection itself is working. To get "
-                        "images, remove and re-add this integration and fill in "
-                        "the Samsung Account fields."
-                    )
-                    return False
+                    # needs a Samsung identity. Reauth would not help, so try
+                    # the public files endpoint once, else disable images.
+                    r = self._probe_public_files_api(file_id)
+                    if r is None:
+                        return False
+                    url = r.url
                 self._check_response(r)
                 content_type = r.headers.get("content-type", "")
                 _LOGGER.debug(

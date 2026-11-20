@@ -41,6 +41,7 @@ from .const import (
     AUTH_MODE_STANDALONE_OAUTH,
     CONF_AUTH_MODE,
     CONF_DEVICE_ID,
+    CONF_IMAGE_TOKEN,
     CONF_LINKED_SMARTTHINGS_ENTRY_ID,
     CONF_OAUTH_CLIENT_ID,
     CONF_OAUTH_CLIENT_SECRET,
@@ -77,6 +78,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "integration in Settings → Devices & Services."
             )
         hub = FamilyHub(hass, token=token, device_id=device_id)
+
+    hub.set_image_token(entry.data.get(CONF_IMAGE_TOKEN))
 
     hass.data[DOMAIN][entry.entry_id] = entry
     hass.data[DOMAIN]["hub"] = hub
@@ -247,6 +250,7 @@ async def _build_standalone_oauth_hub(
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Handle config entry updates (e.g. after re-authentication)."""
     hub: FamilyHub = hass.data[DOMAIN]["hub"]
+    hub.set_image_token(entry.data.get(CONF_IMAGE_TOKEN))
     auth_mode = entry.data.get(CONF_AUTH_MODE, AUTH_MODE_PAT)
     if auth_mode == AUTH_MODE_PAT:
         new_token = entry.data.get(CONF_TOKEN)
