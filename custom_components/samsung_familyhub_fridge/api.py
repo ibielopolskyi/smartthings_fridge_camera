@@ -19,6 +19,9 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+DEVICES_URL = "https://api.smartthings.com/v1/devices"
+VIEW_INSIDE_CAPABILITY = "samsungce.viewInside"
+
 
 class AuthenticationError(Exception):
     """Raised when SmartThings API returns an authentication error (401/403)."""
@@ -262,7 +265,9 @@ class FamilyHub:
 
     async def authenticate(self) -> bool:
         """Test if we can authenticate with the host."""
-        await self._hass.async_add_executor_job(self.get_all_device_status)
+        status = await self._hass.async_add_executor_job(self.get_all_device_status)
+        # Keep the device list so `device_id` can be auto-detected from it.
+        self.set_device_status(status)
         return True
 
     def set_device_status(self, status):
@@ -364,9 +369,16 @@ class FamilyHub:
         return successes > 0
 
     def get_all_device_status(self):
-        """Get all of the devices in the account."""
+        """List the devices in the account via the public SmartThings API.
+
+        Uses ``api.smartthings.com/v1/devices`` rather than the private
+        ``client.smartthings.com/devices/status`` endpoint: the private one
+        rejects tokens that carry no Samsung Account identity (HA core
+        SmartThings OAuth tokens, standalone OAuth tokens, most PATs) with
+        400 "No samsung id available", which made setup fail.
+        """
         r = requests.get(
-            "https://client.smartthings.com/devices/status",
+            DEVICES_URL,
             headers=self._headers,
             timeout=DEFAULT_TIMEOUT,
         )
@@ -376,6 +388,27 @@ class FamilyHub:
             _LOGGER.error(
                 "SmartThings API returned error: %s", data["error"]
             )
+            return data
+
+        # The public API pages large device lists; follow `_links.next`.
+        pages = 1
+        while isinstance(data, dict) and pages < 20:
+            next_href = ((data.get("_links") or {}).get("next") or {}).get("href")
+            if not next_href:
+                break
+            r = requests.get(
+                next_href, headers=self._headers, timeout=DEFAULT_TIMEOUT
+            )
+            self._check_response(r)
+            if not r.ok:
+                break
+            page = r.json()
+            data = {
+                **page,
+                "items": list(data.get("items") or [])
+                + list(page.get("items") or []),
+            }
+            pages += 1
         return data
 
     def get_current_device_status(self):
@@ -449,12 +482,29 @@ class FamilyHub:
             )
             return
         for element in items:
+            if not isinstance(element, dict):
+                continue
+            # Legacy private-endpoint format: one row per attribute.
             if (
-                element.get("capabilityId") == "samsungce.viewInside"
+                element.get("capabilityId") == VIEW_INSIDE_CAPABILITY
                 and element.get("attributeName") == "contents"
             ):
                 self._device_id = element["deviceId"]
                 break
+            # Public API format: one row per device, capabilities per component.
+            for component in element.get("components") or []:
+                caps = component.get("capabilities") or []
+                if any(c.get("id") == VIEW_INSIDE_CAPABILITY for c in caps):
+                    self._device_id = element.get("deviceId")
+                    break
+            if self._device_id:
+                break
+        if not self._device_id:
+            _LOGGER.warning(
+                "No device with the %s capability found in this SmartThings "
+                "account — enter the fridge's Device ID manually",
+                VIEW_INSIDE_CAPABILITY,
+            )
 
     def update_camera(self):
         """Send the reverse-engineered refresh command to the fridge.

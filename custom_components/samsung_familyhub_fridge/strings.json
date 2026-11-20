@@ -36,10 +36,13 @@
       },
       "oauth": {
         "title": "Reuse SmartThings OAuth credentials",
-        "description": "Select an existing HA core SmartThings integration to borrow its OAuth2 credentials. Tokens will refresh automatically.",
+        "description": "Select an existing HA core SmartThings integration to borrow its OAuth2 credentials. Tokens will refresh automatically.\n\nThe fridge is found automatically; enter its Device ID only if detection fails (find it at https://my.smartthings.com/advanced/devices).\n\nCamera images are served by a Samsung endpoint that needs a Samsung Account login. Enter your Samsung Account email and password to enable image downloads, or leave them empty to skip.",
         "data": {
           "linked_smartthings_entry_id": "SmartThings integration",
-          "device_id": "Device ID (optional)"
+          "device_id": "Device ID (optional)",
+          "samsung_email": "Samsung Account email (optional)",
+          "samsung_password": "Samsung Account password (optional)",
+          "samsung_signin_client_secret": "Samsung signin client secret (optional)"
         }
       },
       "pat": {
@@ -65,7 +68,8 @@
       "required": "This field is required",
       "invalid_redirect_url": "No authorization code found in the URL. Check the URL and try again.",
       "code_exchange_failed": "Failed to exchange the authorization code. Check your credentials and try again.",
-      "samsung_login_failed": "Samsung Account login failed. Check your email and password. Accounts with 2FA are not supported."
+      "samsung_login_failed": "Samsung Account login failed. Check your email and password. Accounts with 2FA are not supported.",
+      "no_device_found": "No Family Hub fridge with a camera was found in this SmartThings account. Enter the fridge's Device ID manually."
     },
     "abort": {
       "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",

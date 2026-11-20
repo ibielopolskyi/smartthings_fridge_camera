@@ -96,6 +96,53 @@ async def _validate_oauth(
     }
 
 
+class SamsungLoginFailed(HomeAssistantError):
+    """Samsung Account login failed (bad credentials, 2FA, ...)."""
+
+
+async def _samsung_iot_login(
+    hass: HomeAssistant, user_input: dict[str, Any]
+) -> dict[str, Any]:
+    """Optionally log in to Samsung Account for camera image downloads.
+
+    Returns config-entry data to merge in: the IoT refresh token and auth
+    server when email + password were given, otherwise an empty dict.
+    """
+    email = (user_input.get("samsung_email") or "").strip()
+    password = (user_input.get("samsung_password") or "").strip()
+    signin_client_secret = (
+        user_input.get(CONF_SAMSUNG_SIGNIN_CLIENT_SECRET) or ""
+    ).strip()
+    data: dict[str, Any] = {CONF_SAMSUNG_SIGNIN_CLIENT_SECRET: signin_client_secret}
+    if not (email and password):
+        _LOGGER.warning(
+            "Samsung Account credentials not provided — camera image "
+            "downloads will be unavailable"
+        )
+        return data
+    samsung_auth = SamsungAccountAuth(
+        email=email,
+        password=password,
+        signin_client_id=SAMSUNG_LOGIN_CLIENT_ID,
+        signin_client_secret=signin_client_secret,
+    )
+    try:
+        iot_creds = await hass.async_add_executor_job(samsung_auth.login_iot)
+    except AuthError as err:
+        _LOGGER.warning("Samsung Account login failed: %s", err)
+        raise SamsungLoginFailed from err
+    data[CONF_SAMSUNG_IOT_REFRESH_TOKEN] = iot_creds.refresh_token
+    data[CONF_SAMSUNG_IOT_AUTH_SERVER] = iot_creds.auth_server_url
+    return data
+
+
+SAMSUNG_FIELDS = {
+    vol.Optional("samsung_email"): str,
+    vol.Optional("samsung_password"): str,
+    vol.Optional(CONF_SAMSUNG_SIGNIN_CLIENT_SECRET): str,
+}
+
+
 def _smartthings_entries(hass: HomeAssistant) -> list[config_entries.ConfigEntry]:
     """Return all loaded HA core smartthings config entries."""
     return [
@@ -143,16 +190,22 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 data = await _validate_oauth(
                     self.hass,
                     user_input[CONF_LINKED_SMARTTHINGS_ENTRY_ID],
-                    user_input.get(CONF_DEVICE_ID) or None,
+                    (user_input.get(CONF_DEVICE_ID) or "").strip() or None,
                 )
+                data.update(await _samsung_iot_login(self.hass, user_input))
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
                 errors["base"] = "invalid_auth"
+            except SamsungLoginFailed:
+                errors["base"] = "samsung_login_failed"
             except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception("Unexpected exception during OAuth validation")
                 errors["base"] = "unknown"
             else:
+                if not data.get(CONF_DEVICE_ID):
+                    errors["base"] = "no_device_found"
+            if not errors:
                 return self.async_create_entry(
                     title="Samsung Fridge Camera (OAuth)", data=data
                 )
@@ -161,6 +214,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             {
                 vol.Required(CONF_LINKED_SMARTTHINGS_ENTRY_ID): vol.In(options),
                 vol.Optional(CONF_DEVICE_ID): str,
+                **SAMSUNG_FIELDS,
             }
         )
         return self.async_show_form(
@@ -257,54 +311,26 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Step 3 of standalone OAuth: optional Samsung Account login."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            email = (user_input.get("samsung_email") or "").strip()
-            password = (user_input.get("samsung_password") or "").strip()
-            signin_client_secret = (
-                user_input.get(CONF_SAMSUNG_SIGNIN_CLIENT_SECRET) or ""
-            ).strip()
             data: dict[str, Any] = {
                 CONF_AUTH_MODE: AUTH_MODE_STANDALONE_OAUTH,
                 CONF_OAUTH_CLIENT_ID: self._standalone_client_id,
                 CONF_OAUTH_CLIENT_SECRET: self._standalone_client_secret,
                 CONF_OAUTH_REFRESH_TOKEN: self._standalone_refresh_token,
-                CONF_SAMSUNG_SIGNIN_CLIENT_SECRET: signin_client_secret,
             }
-            if email and password:
-                try:
-                    samsung_auth = SamsungAccountAuth(
-                        email=email,
-                        password=password,
-                        signin_client_id=SAMSUNG_LOGIN_CLIENT_ID,
-                        signin_client_secret=signin_client_secret,
-                    )
-                    iot_creds = await self.hass.async_add_executor_job(
-                        samsung_auth.login_iot
-                    )
-                    data[CONF_SAMSUNG_IOT_REFRESH_TOKEN] = iot_creds.refresh_token
-                    data[CONF_SAMSUNG_IOT_AUTH_SERVER] = iot_creds.auth_server_url
-                except AuthError as err:
-                    _LOGGER.warning("Samsung Account login failed: %s", err)
-                    errors["base"] = "samsung_login_failed"
-                except Exception:  # pylint: disable=broad-except
-                    _LOGGER.exception("Unexpected error during Samsung login")
-                    errors["base"] = "unknown"
-            else:
-                _LOGGER.warning(
-                    "Samsung Account credentials not provided — IoT features unavailable"
-                )
+            try:
+                data.update(await _samsung_iot_login(self.hass, user_input))
+            except SamsungLoginFailed:
+                errors["base"] = "samsung_login_failed"
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.exception("Unexpected error during Samsung login")
+                errors["base"] = "unknown"
 
             if not errors:
                 return self.async_create_entry(
                     title="Samsung Fridge Camera (Standalone OAuth)", data=data
                 )
 
-        schema = vol.Schema(
-            {
-                vol.Optional("samsung_email"): str,
-                vol.Optional("samsung_password"): str,
-                vol.Optional(CONF_SAMSUNG_SIGNIN_CLIENT_SECRET): str,
-            }
-        )
+        schema = vol.Schema(SAMSUNG_FIELDS)
         return self.async_show_form(
             step_id="standalone_oauth_samsung",
             data_schema=schema,
