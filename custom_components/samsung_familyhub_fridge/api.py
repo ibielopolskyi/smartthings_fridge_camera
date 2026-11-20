@@ -1,6 +1,8 @@
 from __future__ import annotations
 from datetime import timedelta
+import json
 import logging
+import re
 import time
 from typing import TYPE_CHECKING
 
@@ -27,6 +29,45 @@ class AuthenticationError(Exception):
     """Raised when SmartThings API returns an authentication error (401/403)."""
 
 
+CAMERA_KEYWORDS = re.compile(r"view|image|camera|file|picture|photo|video", re.I)
+
+
+def jpeg_size(data: bytes | None) -> tuple[int, int] | None:
+    """Return (width, height) of a JPEG from its SOF header, or None."""
+    if not data or data[:2] != b"\xff\xd8":
+        return None
+    i = 2
+    while i + 9 < len(data):
+        if data[i] != 0xFF:
+            i += 1
+            continue
+        marker = data[i + 1]
+        if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+            i += 2
+            continue
+        length = int.from_bytes(data[i + 2:i + 4], "big")
+        # SOF0..SOF15 except DHT(C4), JPG(C8), DAC(CC)
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            height = int.from_bytes(data[i + 5:i + 7], "big")
+            width = int.from_bytes(data[i + 7:i + 9], "big")
+            return width, height
+        i += 2 + length
+    return None
+
+
+def camera_related_status(full_status: dict) -> dict:
+    """Pick every camera/image-looking capability from a full device status."""
+    found: dict = {}
+    components = (full_status or {}).get("components") or {}
+    for comp_name, caps in components.items():
+        if not isinstance(caps, dict):
+            continue
+        for cap_name, attrs in caps.items():
+            if CAMERA_KEYWORDS.search(cap_name):
+                found[f"{comp_name}/{cap_name}"] = attrs
+    return found
+
+
 class ImageTokenExpired(AuthenticationError):
     """The picture-only SmartThings token was rejected (expired/revoked)."""
 
@@ -43,6 +84,21 @@ class DataCoordinator(DataUpdateCoordinator):
         self.api = api
         self.last_file_ids = []
         self.last_updated_at = None
+        self._camera_details_logged = False
+        self._last_view_inside_json: str | None = None
+
+    def _log_view_inside_if_changed(self) -> None:
+        """Debug-log the samsungce.viewInside block whenever it changes."""
+        if not _LOGGER.isEnabledFor(logging.DEBUG):
+            return
+        status = self.api._current_device_status
+        if not isinstance(status, dict):
+            return
+        block = status.get("samsungce.viewInside")
+        text = json.dumps(block, sort_keys=True)
+        if text != self._last_view_inside_json:
+            self._last_view_inside_json = text
+            _LOGGER.debug("Camera details: samsungce.viewInside = %s", text[:4000])
 
     async def _async_update_data(self):
         """Fetch data from API endpoint."""
@@ -56,6 +112,15 @@ class DataCoordinator(DataUpdateCoordinator):
                     self.api.get_all_device_status
                 )
                 self.api.set_device_status(status)
+            if (
+                not self._camera_details_logged
+                and self.api.device_id
+                and _LOGGER.isEnabledFor(logging.DEBUG)
+            ):
+                self._camera_details_logged = True
+                await self._hass.async_add_executor_job(
+                    self.api.log_camera_details
+                )
             if self.api.should_update:
                 _LOGGER.debug("should_update=True → sending refresh command to fridge")
                 await self._hass.async_add_executor_job(self.api.update_camera)
@@ -86,6 +151,7 @@ class DataCoordinator(DataUpdateCoordinator):
                     self.api.get_current_device_status
                 )
                 self.api.set_current_device_status(status)
+                self._log_view_inside_if_changed()
                 self.api.extract_device_data()
                 _LOGGER.debug(
                     "polled status: last_closed=%s should_update=%s file_ids=%s",
@@ -536,6 +602,12 @@ class FamilyHub:
                 )
                 result[idx] = r.content
                 successes += 1
+                _LOGGER.debug(
+                    "Camera details: picture %d is %s pixels (%d bytes)",
+                    idx,
+                    "x".join(map(str, jpeg_size(r.content) or ("?", "?"))),
+                    len(r.content),
+                )
             except AuthenticationError:
                 # Auth errors must propagate up so the coordinator can
                 # trigger reauth — do not swallow.
@@ -600,6 +672,45 @@ class FamilyHub:
             }
             pages += 1
         return data
+
+    def log_camera_details(self) -> None:
+        """Debug-log every camera-related capability in the full device status.
+
+        The integration normally reads only the ``main`` component; this
+        looks at all components once, to spot extra or larger pictures.
+        """
+        try:
+            r = requests.get(
+                f"https://api.smartthings.com/v1/devices/{self.device_id}/status",
+                headers=self._headers,
+                timeout=DEFAULT_TIMEOUT,
+            )
+            if not r.ok:
+                _LOGGER.debug(
+                    "Camera details: full status HTTP %s %s",
+                    r.status_code,
+                    r.text[:300],
+                )
+                return
+            full = r.json()
+        except Exception as err:  # pylint: disable=broad-except
+            _LOGGER.debug("Camera details: full status failed: %s", err)
+            return
+        components = (full.get("components") or {}) if isinstance(full, dict) else {}
+        _LOGGER.debug(
+            "Camera details: components and capabilities: %s",
+            json.dumps({c: sorted(v) for c, v in components.items()
+                        if isinstance(v, dict)})[:4000],
+        )
+        found = camera_related_status(full)
+        if not found:
+            _LOGGER.debug("Camera details: no camera-related capabilities found")
+        for name, attrs in found.items():
+            _LOGGER.debug(
+                "Camera details: %s = %s",
+                name,
+                json.dumps(attrs, sort_keys=True)[:4000],
+            )
 
     def get_current_device_status(self):
         """Get the current device status."""
