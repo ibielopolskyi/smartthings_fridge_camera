@@ -117,10 +117,12 @@ async def _samsung_iot_login(
     ).strip()
     data: dict[str, Any] = {CONF_SAMSUNG_SIGNIN_CLIENT_SECRET: signin_client_secret}
     if not (email and password):
-        _LOGGER.warning(
-            "Samsung Account credentials not provided — camera image "
-            "downloads will be unavailable"
-        )
+        if not (user_input.get(CONF_IMAGE_TOKEN) or "").strip():
+            _LOGGER.info(
+                "No picture token or Samsung Account login given — camera "
+                "pictures will only work if the public SmartThings files "
+                "endpoint accepts this login"
+            )
         return data
     samsung_auth = SamsungAccountAuth(
         email=email,
