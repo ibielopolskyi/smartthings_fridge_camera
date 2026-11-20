@@ -20,6 +20,6 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install requests
-      - run: python scripts/probe_public_files_2.py
+      - run: python scripts/probe_public_files_3.py
         env:
           ST_TOKEN: ${{ secrets.SAMSUNG || secrets.SMARTTHINGS_TOKEN }}
