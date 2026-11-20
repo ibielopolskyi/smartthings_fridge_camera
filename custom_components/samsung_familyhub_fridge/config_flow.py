@@ -16,6 +16,7 @@ from homeassistant.helpers import config_entry_oauth2_flow
 from .api import DEVICES_URL, AuthenticationError, FamilyHub
 from .auth import AuthError, SamsungAccountAuth, SmartThingsOAuth
 from .auth import SAMSUNG_LOGIN_CLIENT_ID
+from .samsung_browser_login import SamsungBrowserLogin
 from .const import (
     AUTH_MODE_OAUTH,
     AUTH_MODE_PAT,
@@ -184,6 +185,9 @@ async def _image_token_data(
 
 IMAGE_TOKEN_FIELD = {vol.Optional(CONF_IMAGE_TOKEN): str}
 
+CONF_SAMSUNG_BROWSER_LOGIN = "samsung_browser_login"
+BROWSER_LOGIN_FIELD = {vol.Optional(CONF_SAMSUNG_BROWSER_LOGIN, default=False): bool}
+
 SAMSUNG_FIELDS = {
     vol.Optional("samsung_email"): str,
     vol.Optional("samsung_password"): str,
@@ -241,7 +245,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     (user_input.get(CONF_DEVICE_ID) or "").strip() or None,
                 )
                 data.update(await _image_token_data(self.hass, user_input))
-                data.update(await _samsung_iot_login(self.hass, user_input))
+                if not user_input.get(CONF_SAMSUNG_BROWSER_LOGIN):
+                    data.update(await _samsung_iot_login(self.hass, user_input))
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except InvalidAuth:
@@ -259,6 +264,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if not data.get(CONF_DEVICE_ID):
                     errors["base"] = "no_device_found"
             if not errors:
+                if user_input.get(CONF_SAMSUNG_BROWSER_LOGIN):
+                    self._pending_entry = ("Samsung Fridge Camera (OAuth)", data)
+                    return await self.async_step_samsung_browser()
                 return self.async_create_entry(
                     title="Samsung Fridge Camera (OAuth)", data=data
                 )
@@ -267,6 +275,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             {
                 vol.Required(CONF_LINKED_SMARTTHINGS_ENTRY_ID): vol.In(options),
                 vol.Optional(CONF_DEVICE_ID): str,
+                **BROWSER_LOGIN_FIELD,
                 **IMAGE_TOKEN_FIELD,
                 **SAMSUNG_FIELDS,
             }
@@ -373,7 +382,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
             try:
                 data.update(await _image_token_data(self.hass, user_input))
-                data.update(await _samsung_iot_login(self.hass, user_input))
+                if not user_input.get(CONF_SAMSUNG_BROWSER_LOGIN):
+                    data.update(await _samsung_iot_login(self.hass, user_input))
             except InvalidImageToken:
                 errors[CONF_IMAGE_TOKEN] = "invalid_image_token"
             except CannotConnect:
@@ -387,11 +397,15 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
 
             if not errors:
-                return self.async_create_entry(
-                    title="Samsung Fridge Camera (Standalone OAuth)", data=data
-                )
+                title = "Samsung Fridge Camera (Standalone OAuth)"
+                if user_input.get(CONF_SAMSUNG_BROWSER_LOGIN):
+                    self._pending_entry = (title, data)
+                    return await self.async_step_samsung_browser()
+                return self.async_create_entry(title=title, data=data)
 
-        schema = vol.Schema({**IMAGE_TOKEN_FIELD, **SAMSUNG_FIELDS})
+        schema = vol.Schema(
+            {**BROWSER_LOGIN_FIELD, **IMAGE_TOKEN_FIELD, **SAMSUNG_FIELDS}
+        )
         return self.async_show_form(
             step_id="standalone_oauth_samsung",
             data_schema=schema,
@@ -403,6 +417,67 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "Leave empty to skip Samsung IoT token acquisition."
                 )
             },
+        )
+
+    # ---------------- Samsung sign-in via Samsung's web page ----------------
+
+    async def async_step_samsung_browser(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Sign in on Samsung's own page (handles 2-step verification)."""
+        errors: dict[str, str] = {}
+        pending = getattr(self, "_pending_entry", None)
+        if pending is None:
+            return await self.async_step_user()
+        title, data = pending
+
+        login: SamsungBrowserLogin | None = getattr(self, "_browser_login", None)
+        if login is None:
+            ha_config = getattr(self.hass, "config", None)
+            country = (getattr(ha_config, "country", None) or "us").lower()
+            language = (getattr(ha_config, "language", None) or "en")[:2]
+            login = SamsungBrowserLogin(country=country, language=language)
+            try:
+                self._browser_url = await self.hass.async_add_executor_job(
+                    login.start
+                )
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.warning("Could not start Samsung sign-in: %s", err)
+                return self.async_abort(reason="samsung_browser_unavailable")
+            self._browser_login = login
+
+        if user_input is not None:
+            redirect = (user_input.get("redirect_url") or "").strip()
+            if not redirect:
+                errors["redirect_url"] = "required"
+            else:
+                try:
+                    creds = await self.hass.async_add_executor_job(
+                        login.finish, redirect
+                    )
+                except ValueError as err:
+                    _LOGGER.warning("Samsung sign-in address not usable: %s", err)
+                    errors["redirect_url"] = "invalid_samsung_redirect"
+                except (AuthError, requests.RequestException) as err:
+                    _LOGGER.warning("Samsung sign-in failed: %s", err)
+                    errors["base"] = "samsung_browser_failed"
+                except Exception:  # pylint: disable=broad-except
+                    _LOGGER.exception("Unexpected error finishing Samsung sign-in")
+                    errors["base"] = "unknown"
+                else:
+                    data = {
+                        **data,
+                        CONF_SAMSUNG_IOT_REFRESH_TOKEN: creds.refresh_token,
+                        CONF_SAMSUNG_IOT_AUTH_SERVER: creds.auth_server_url,
+                    }
+                    self._pending_entry = None
+                    return self.async_create_entry(title=title, data=data)
+
+        return self.async_show_form(
+            step_id="samsung_browser",
+            data_schema=vol.Schema({vol.Required("redirect_url"): str}),
+            errors=errors,
+            description_placeholders={"sign_in_url": self._browser_url},
         )
 
     # ---------------- PAT path (legacy) ----------------

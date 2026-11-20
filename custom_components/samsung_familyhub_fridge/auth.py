@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 import os
 import secrets
@@ -377,6 +378,8 @@ def get_samsung_iot_token(
     userauth_token: str,
     login_id: str = "",
     auth_server_url: str = "https://us-auth2.samsungosp.com",
+    physical_address_text: str | None = None,
+    code_verifier: str | None = None,
 ) -> SamsungIoTCredentials:
     """Exchange a Samsung Account ``userauth_token`` for an IoT-scoped token.
 
@@ -388,8 +391,18 @@ def get_samsung_iot_token(
       1. GET  /auth/oauth2/v2/authorize  → authorization code
       2. POST /auth/oauth2/token         → access_token + refresh_token
     """
-    verifier, challenge = _generate_pkce_pair()
-    device_id = base64.urlsafe_b64encode(os.urandom(8)).rstrip(b"=").decode()
+    if code_verifier:
+        verifier = code_verifier
+        challenge = (
+            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+            .rstrip(b"=")
+            .decode()
+        )
+    else:
+        verifier, challenge = _generate_pkce_pair()
+    device_id = physical_address_text or (
+        base64.urlsafe_b64encode(os.urandom(8)).rstrip(b"=").decode()
+    )
 
     # Step 1: Get authorization code for IoT scope
     params = {
@@ -406,30 +419,40 @@ def get_samsung_iot_token(
     if login_id:
         params["login_id"] = login_id
 
-    resp = requests.get(
-        f"{auth_server_url}/auth/oauth2/v2/authorize",
-        params=params,
-        allow_redirects=False,
-        timeout=30,
-    )
-    if resp.status_code not in (200, 302):
-        raise AuthError(
-            f"IoT authorize failed: HTTP {resp.status_code} {resp.text[:200]}"
+    def _authorize(query: dict) -> tuple[str | None, dict]:
+        resp = requests.get(
+            f"{auth_server_url}/auth/oauth2/v2/authorize",
+            params=query,
+            allow_redirects=False,
+            timeout=30,
         )
+        if resp.status_code not in (200, 302):
+            raise AuthError(
+                f"IoT authorize failed: HTTP {resp.status_code} {resp.text[:200]}"
+            )
+        # The code might be in the response body (JSON) or a redirect Location
+        if resp.status_code == 302:
+            loc = resp.headers.get("Location", "")
+            codes = parse_qs(urlparse(loc).query).get("code", [])
+            if codes:
+                return codes[0], {}
+        try:
+            body = resp.json()
+        except ValueError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        return body.get("code") or body.get("auth_code"), body
 
-    # The code might be in the response body (JSON) or in a redirect Location
-    auth_code = None
-    if resp.status_code == 302:
-        loc = resp.headers.get("Location", "")
-        codes = parse_qs(urlparse(loc).query).get("code", [])
-        if codes:
-            auth_code = codes[0]
-    if not auth_code:
-        body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
-        auth_code = body.get("code") or body.get("auth_code")
+    auth_code, body = _authorize(params)
+    if not auth_code and body.get("privacyAccepted") == "N" and "login_id" in params:
+        # uTag: some accounts only return a code without login_id.
+        params.pop("login_id")
+        auth_code, body = _authorize(params)
+    resp_text = json.dumps(body)[:300] if body else ""
     if not auth_code:
         raise AuthError(
-            f"IoT authorize did not return a code: {resp.text[:300]}"
+            f"IoT authorize did not return a code: {resp_text}"
         )
 
     _LOGGER.debug("Got IoT authorization code")
