@@ -207,3 +207,48 @@ async def test_oauth_step_invalid_auth_shows_error():
             user_input={CONF_LINKED_SMARTTHINGS_ENTRY_ID: "st-entry"}
         )
     assert result["errors"]["base"] == "invalid_auth"
+
+
+# ---------------------------------------------------------------------------
+# Samsung login rejected with HTTP 400 (reported from a real install)
+# ---------------------------------------------------------------------------
+
+def test_samsung_request_authentication_400_raises_auth_error():
+    from custom_components.samsung_familyhub_fridge.auth import (
+        SAMSUNG_AUTH_URL,
+        AuthError,
+        SamsungAccountAuth,
+    )
+
+    auth = SamsungAccountAuth(
+        email="user@example.com",
+        password="pw",
+        signin_client_id="yfrtglt53o",
+        signin_client_secret="",
+    )
+    with rm.Mocker() as m:
+        m.post(
+            SAMSUNG_AUTH_URL,
+            status_code=400,
+            json={"error": "invalid_request", "error_description": "bad client"},
+        )
+        with pytest.raises(AuthError, match="bad client"):
+            auth.login_iot()
+
+
+@pytest.mark.asyncio
+async def test_oauth_step_samsung_http_400_shows_login_error_not_unknown():
+    import requests
+
+    flow = _make_flow()
+    with patch(f"{FLOW}._validate_oauth", AsyncMock(return_value=_validated())), \
+         patch(f"{FLOW}.SamsungAccountAuth") as MockAuth:
+        MockAuth.return_value.login_iot.side_effect = requests.HTTPError("400")
+        result = await flow.async_step_oauth(
+            user_input={
+                CONF_LINKED_SMARTTHINGS_ENTRY_ID: "st-entry",
+                "samsung_email": "user@example.com",
+                "samsung_password": "pw",
+            }
+        )
+    assert result["errors"]["base"] == "samsung_login_failed"

@@ -68,7 +68,7 @@
       "required": "This field is required",
       "invalid_redirect_url": "No authorization code found in the URL. Check the URL and try again.",
       "code_exchange_failed": "Failed to exchange the authorization code. Check your credentials and try again.",
-      "samsung_login_failed": "Samsung Account login failed. Check your email and password. Accounts with 2FA are not supported.",
+      "samsung_login_failed": "Samsung rejected the Samsung Account login, so camera pictures can't be enabled. This usually means the Samsung signin client secret is missing or wrong, or the account uses 2-step verification. Clear the three Samsung fields to finish setup without camera pictures; the log has Samsung's exact reply.",
       "no_device_found": "No Family Hub fridge with a camera was found in this SmartThings account. Enter the fridge's Device ID manually."
     },
     "abort": {
