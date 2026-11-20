@@ -2,7 +2,9 @@ from homeassistant.components.camera import Camera
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .api import DataCoordinator
 from .const import DOMAIN
 
 
@@ -13,18 +15,22 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Samsung Family Hub fridge cameras."""
     hub = hass.data[DOMAIN]["hub"]
+    coordinator = hass.data[DOMAIN].get("coordinator") or DataCoordinator(hass, hub)
     async_add_entities(
         [
-            FamilyHubCamera("family_hub_top", 0, hub),
-            FamilyHubCamera("family_hub_middle", 1, hub),
-            FamilyHubCamera("family_hub_bottom", 2, hub),
+            FamilyHubCamera("family_hub_top", 0, hub, coordinator),
+            FamilyHubCamera("family_hub_middle", 1, hub, coordinator),
+            FamilyHubCamera("family_hub_bottom", 2, hub, coordinator),
         ]
     )
 
 
-class FamilyHubCamera(Camera):
-    def __init__(self, name, index, hub):
-        super().__init__()
+class FamilyHubCamera(CoordinatorEntity, Camera):
+    """One fridge shelf picture; attributes refresh on every status poll."""
+
+    def __init__(self, name, index, hub, coordinator):
+        super().__init__(coordinator)
+        Camera.__init__(self)
         self.content_type = "image/jpeg"
         self.hub = hub
         self._index = index

@@ -13,8 +13,9 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    hub = hass.data[DOMAIN]["hub"]
-    coordinator = DataCoordinator(hass, hub)
+    coordinator = hass.data[DOMAIN].get("coordinator") or DataCoordinator(
+        hass, hass.data[DOMAIN]["hub"]
+    )
     async_add_entities([LastUpdatedAt(coordinator)])
 
 
