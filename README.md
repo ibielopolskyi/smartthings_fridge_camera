@@ -161,6 +161,20 @@ Make sure to select the additional settings as follows and click "Save":
 </p>
 
 
+# Dashboard card
+
+The integration includes its own card; nothing extra to install. Edit a dashboard, **Add card**, and search for **Family Hub Fridge**. Or in YAML:
+
+```yaml
+type: custom:familyhub-fridge-card
+# optional:
+# device_id: <fridge device ID, if you have several; defaults to the first>
+# title: Kitchen fridge
+# show_header: false
+```
+
+It shows the three shelf pictures uncropped and stacked like the inside of the fridge, how long ago the photo was taken (orange when older than 2 days), and a refresh button. Tap a shelf for the full-size picture.
+
 Credits
 -------
 
