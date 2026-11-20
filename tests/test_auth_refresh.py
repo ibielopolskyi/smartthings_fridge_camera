@@ -27,7 +27,7 @@ def hub(hass):
     return FamilyHub(hass, token="valid-token", device_id="device-123")
 
 
-DEVICE_STATUS_URL = "https://client.smartthings.com/devices/status"
+DEVICE_STATUS_URL = "https://api.smartthings.com/v1/devices"
 CURRENT_STATUS_URL = (
     "https://api.smartthings.com/v1/devices/device-123/components/main/status"
 )

@@ -432,7 +432,15 @@ try:
     import voluptuous  # noqa: F401
 except ImportError:
     vol = _make_module("voluptuous")
-    vol.Schema = lambda *a, **kw: MagicMock()
+    class _Schema:
+        def __init__(self, schema=None, *a, **kw):
+            self.schema = schema or {}
+
+        def __call__(self, data):
+            return data
+
+    vol.Schema = _Schema
+    vol.In = lambda container, *a, **kw: container
     vol.Required = lambda *a, **kw: a[0] if a else "required"
     vol.Optional = lambda *a, **kw: a[0] if a else "optional"
     sys.modules["voluptuous"] = vol
