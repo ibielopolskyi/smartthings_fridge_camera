@@ -59,7 +59,9 @@ def test_photo_details_without_status_is_empty():
 def test_camera_attributes_come_from_hub():
     from custom_components.samsung_familyhub_fridge.camera import FamilyHubCamera
 
-    cam = FamilyHubCamera("family_hub_top", 0, _hub())
+    coordinator = MagicMock()
+    cam = FamilyHubCamera("family_hub_top", 0, _hub(), coordinator)
+    assert cam.coordinator is coordinator  # attributes refresh with each poll
     assert cam.extra_state_attributes["photo_taken_at"] == "2026-11-14T09:26:00Z"
 
 

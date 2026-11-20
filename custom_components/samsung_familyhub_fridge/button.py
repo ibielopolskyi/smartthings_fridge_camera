@@ -7,6 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
+from .entity import fridge_device_info
 
 
 async def async_setup_entry(
@@ -16,7 +17,9 @@ async def async_setup_entry(
 ) -> None:
     """Set up the refresh button."""
     hub = hass.data[DOMAIN]["hub"]
-    async_add_entities([FamilyHubRefreshButton(hub, config_entry.entry_id)])
+    button = FamilyHubRefreshButton(hub, config_entry.entry_id)
+    button._attr_device_info = fridge_device_info(config_entry)
+    async_add_entities([button])
 
 
 class FamilyHubRefreshButton(ButtonEntity):

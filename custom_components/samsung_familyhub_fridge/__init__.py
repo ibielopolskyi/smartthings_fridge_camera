@@ -36,7 +36,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers.event import async_track_time_interval
 
-from .api import FamilyHub
+from .api import DataCoordinator, FamilyHub
 from .const import (
     AUTH_MODE_OAUTH,
     AUTH_MODE_PAT,
@@ -89,6 +89,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data[DOMAIN][entry.entry_id] = entry
     hass.data[DOMAIN]["hub"] = hub
+    # One poller shared by the sensor and the cameras, so camera attributes
+    # (e.g. photo_taken_at) update as soon as new fridge status arrives.
+    hass.data[DOMAIN]["coordinator"] = DataCoordinator(hass, hub)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
@@ -281,9 +284,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id, None)
         hass.data[DOMAIN].pop("hub", None)
+        hass.data[DOMAIN].pop("coordinator", None)
         # Only deregister the service when no other entries remain
         if not [
-            eid for eid in hass.data[DOMAIN] if eid != "hub"
+            eid for eid in hass.data[DOMAIN] if eid not in ("hub", "coordinator")
         ]:
             hass.services.async_remove(DOMAIN, "refresh")
 

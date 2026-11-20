@@ -2,8 +2,11 @@ from homeassistant.components.camera import Camera
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .api import DataCoordinator
 from .const import DOMAIN
+from .entity import fridge_device_info
 
 
 async def async_setup_entry(
@@ -13,18 +16,27 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Samsung Family Hub fridge cameras."""
     hub = hass.data[DOMAIN]["hub"]
+    coordinator = hass.data[DOMAIN].get("coordinator") or DataCoordinator(hass, hub)
     async_add_entities(
         [
-            FamilyHubCamera("family_hub_top", 0, hub),
-            FamilyHubCamera("family_hub_middle", 1, hub),
-            FamilyHubCamera("family_hub_bottom", 2, hub),
+            FamilyHubCamera("family_hub_top", 0, hub, coordinator, config_entry),
+            FamilyHubCamera("family_hub_middle", 1, hub, coordinator, config_entry),
+            FamilyHubCamera("family_hub_bottom", 2, hub, coordinator, config_entry),
         ]
     )
 
 
-class FamilyHubCamera(Camera):
-    def __init__(self, name, index, hub):
-        super().__init__()
+class FamilyHubCamera(CoordinatorEntity, Camera):
+    """One fridge shelf picture; attributes refresh on every status poll."""
+
+    def __init__(self, name, index, hub, coordinator, config_entry=None):
+        super().__init__(coordinator)
+        Camera.__init__(self)
+        if config_entry is not None:
+            # Unique ID: lets HA link the camera to this config entry and
+            # lets users rename / manage it in the UI.
+            self._attr_unique_id = f"{config_entry.entry_id}_{name}"
+            self._attr_device_info = fridge_device_info(config_entry)
         self.content_type = "image/jpeg"
         self.hub = hub
         self._index = index

@@ -1,7 +1,7 @@
 {
   "domain": "samsung_familyhub_fridge",
   "name": "Samsung FamilyHub Fridge",
-  "version": "0.5.0",
+  "version": "0.5.2",
   "codeowners": [
     "@ibielopolskyi",
     "@nachtschatt3n"
