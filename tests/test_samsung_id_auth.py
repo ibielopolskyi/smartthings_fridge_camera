@@ -51,12 +51,21 @@ UNRELATED_400_BODY = {
 class TestSamsungIdAuthError:
     """HTTP 400 with 'No samsung id available' must raise AuthenticationError."""
 
-    def test_no_samsung_id_400_raises_auth_error(self, hub):
-        """HTTP 400 + 'No samsung id available' body raises AuthenticationError."""
+    def test_no_samsung_id_400_disables_images_without_reauth(self, hub):
+        """HTTP 400 'No samsung id' on image download (no Samsung IoT token).
+
+        The SmartThings token is valid — the image server only needs a
+        Samsung Account login, which reauth cannot provide. So: no
+        AuthenticationError (which would force reauth), images are marked
+        unavailable and not retried.
+        """
         with rm.Mocker() as m:
             m.get(rm.ANY, status_code=400, json=NO_SAMSUNG_ID_BODY)
-            with pytest.raises(AuthenticationError, match="No samsung id available"):
-                hub.download_images()
+            assert hub.download_images() is False
+            assert hub.images_unavailable_reason == "no_samsung_account"
+            calls = m.call_count
+            assert hub.download_images() is False
+            assert m.call_count == calls  # not retried
 
     def test_unrelated_400_does_not_raise_auth_error(self, hub):
         """HTTP 400 with an unrelated body must NOT raise AuthenticationError."""

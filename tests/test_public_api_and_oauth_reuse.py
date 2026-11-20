@@ -252,3 +252,26 @@ async def test_oauth_step_samsung_http_400_shows_login_error_not_unknown():
             }
         )
     assert result["errors"]["base"] == "samsung_login_failed"
+
+
+@pytest.mark.asyncio
+async def test_coordinator_no_samsung_id_does_not_trigger_reauth():
+    """OAuth token without Samsung login: image 400 must not force reauth."""
+    from custom_components.samsung_familyhub_fridge.api import DataCoordinator
+
+    hass = _HomeAssistant()
+    hub = FamilyHub(hass, token="oauth-tok", device_id="fridge-1")
+    hub.set_current_device_status(
+        {"samsungce.viewInside": {"contents": {"value": [{"fileId": "f1"}]}}}
+    )
+    coordinator = DataCoordinator(hass, hub)
+    with rm.Mocker() as m:
+        m.get(
+            rm.ANY,
+            status_code=400,
+            json={"error": {"code": "BadRequestError",
+                            "message": "No samsung id available"}},
+        )
+        await coordinator._async_update_data()  # must not raise
+    assert hub.images_unavailable_reason == "no_samsung_account"
+    assert coordinator.last_file_ids == ["f1"]  # won't re-download every poll

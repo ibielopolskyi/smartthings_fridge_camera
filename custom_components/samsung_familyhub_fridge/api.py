@@ -69,6 +69,9 @@ class DataCoordinator(DataUpdateCoordinator):
                 if success:
                     self.last_updated_at = time.time()
                     self.last_file_ids = new_ids
+                elif self.api.images_unavailable_reason:
+                    # Already warned once; don't re-download every poll.
+                    self.last_file_ids = new_ids
                 else:
                     _LOGGER.warning(
                         "download_images returned no successes — will retry "
@@ -88,8 +91,7 @@ class DataCoordinator(DataUpdateCoordinator):
                 )
         except AuthenticationError as err:
             raise ConfigEntryAuthFailed(
-                "SmartThings token expired or is invalid. "
-                "Please re-authenticate with a new token."
+                f"SmartThings authentication failed: {err}"
             ) from err
 
 
@@ -129,6 +131,9 @@ class FamilyHub:
         self._samsung_iot_refresh_token: str | None = None
         self._samsung_iot_auth_server: str = "https://us-auth2.samsungosp.com"
         self._entry = None
+        # Set when the image server refused our token for lack of a Samsung
+        # Account identity; stops retrying every poll until reload.
+        self.images_unavailable_reason: str | None = None
 
     def set_samsung_iot_token(
         self,
@@ -285,6 +290,8 @@ class FamilyHub:
         """
         if not self._current_device_status or not self.device_id:
             return False
+        if self.images_unavailable_reason:
+            return False
 
         file_ids = self.get_file_ids()
         # Start from the existing images so a partial failure doesn't wipe
@@ -332,6 +339,23 @@ class FamilyHub:
                             headers=self._samsung_iot_headers,
                             timeout=DEFAULT_TIMEOUT,
                         )
+                if (
+                    dl_headers is not self._samsung_iot_headers
+                    and r.status_code == 400
+                    and self._is_no_samsung_id_error(r)
+                ):
+                    # The SmartThings token is fine; the image server just
+                    # needs a Samsung Account login. Re-authenticating the
+                    # SmartThings token would not help, so don't trigger reauth.
+                    self.images_unavailable_reason = "no_samsung_account"
+                    _LOGGER.warning(
+                        "Camera images unavailable: the image server needs a "
+                        "Samsung Account login (\"No samsung id available\"). "
+                        "The SmartThings connection itself is working. To get "
+                        "images, remove and re-add this integration and fill in "
+                        "the Samsung Account fields."
+                    )
+                    return False
                 self._check_response(r)
                 content_type = r.headers.get("content-type", "")
                 _LOGGER.debug(
