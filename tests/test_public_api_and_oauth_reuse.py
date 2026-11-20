@@ -425,3 +425,24 @@ def test_public_files_406_everywhere_logs_all_replies(caplog):
     assert tried == list(FamilyHub._PUBLIC_FILES_ACCEPTS)
     assert hub.images_unavailable_reason == "no_samsung_account"
     assert "NotAcceptableError" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_oauth_step_samsung_2fa_shows_specific_error():
+    from custom_components.samsung_familyhub_fridge.auth import AuthError
+
+    flow = _make_flow()
+    with patch(f"{FLOW}._validate_oauth", AsyncMock(return_value=_validated())), \
+         patch(f"{FLOW}.SamsungAccountAuth") as MockAuth:
+        MockAuth.return_value.login_iot.side_effect = AuthError(
+            "Samsung Account login rejected (HTTP 400): The 2factor SMS "
+            "authentication is required.(********60)[1:3:4]"
+        )
+        result = await flow.async_step_oauth(
+            user_input={
+                CONF_LINKED_SMARTTHINGS_ENTRY_ID: "st-entry",
+                "samsung_email": "user@example.com",
+                "samsung_password": "pw",
+            }
+        )
+    assert result["errors"]["base"] == "samsung_2fa_required"

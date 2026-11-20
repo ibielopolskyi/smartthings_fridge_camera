@@ -32,19 +32,21 @@
           "samsung_email": "Samsung Account email (optional)",
           "samsung_password": "Samsung Account password (optional)",
           "samsung_signin_client_secret": "Samsung signin client secret (optional)",
-          "image_token": "Picture token (optional): SmartThings personal access token"
+          "image_token": "Picture token (optional): SmartThings personal access token",
+          "samsung_browser_login": "Sign in through Samsung's website (works with 2-step verification, recommended)"
         }
       },
       "oauth": {
         "title": "Reuse SmartThings OAuth credentials",
-        "description": "Select an existing HA core SmartThings integration to borrow its OAuth2 credentials. Tokens will refresh automatically.\n\nThe fridge is found automatically; enter its Device ID only if detection fails (find it at https://my.smartthings.com/advanced/devices).\n\n**Camera pictures** come from a Samsung server that Home Assistant's SmartThings login can't use. To get pictures, fill in ONE of:\n- **Picture token**: create a token at https://account.smartthings.com/tokens (tick all Devices permissions). Easiest, but it expires after 24 hours and Home Assistant will then ask for a new one.\n- **Samsung Account** email + password (+ signin client secret). Renews itself, but Samsung may reject it.\n\nLeave all of them empty to set up without pictures.",
+        "description": "Select an existing HA core SmartThings integration to borrow its OAuth2 credentials. Tokens will refresh automatically.\n\nThe fridge is found automatically; enter its Device ID only if detection fails (find it at https://my.smartthings.com/advanced/devices).\n\n**Camera pictures** come from a Samsung server that Home Assistant's SmartThings login can't use. To get pictures, choose ONE of:\n- **Sign in through Samsung's website** (tick the box): works with 2-step verification and renews itself. You'll get a sign-in link on the next screen.\n- **Samsung Account** email + password (+ signin client secret): renews itself, but doesn't work with 2-step verification.\n- **Picture token**: a token from https://account.smartthings.com/tokens. Expires every 24 hours.\n\nLeave them all empty to set up without pictures.",
         "data": {
           "linked_smartthings_entry_id": "SmartThings integration",
           "device_id": "Device ID (optional)",
           "samsung_email": "Samsung Account email (optional)",
           "samsung_password": "Samsung Account password (optional)",
           "samsung_signin_client_secret": "Samsung signin client secret (optional)",
-          "image_token": "Picture token (optional): SmartThings personal access token"
+          "image_token": "Picture token (optional): SmartThings personal access token",
+          "samsung_browser_login": "Sign in through Samsung's website (works with 2-step verification, recommended)"
         }
       },
       "pat": {
@@ -68,6 +70,13 @@
         "data": {
           "image_token": "Picture token"
         }
+      },
+      "samsung_browser": {
+        "title": "Sign in to your Samsung account",
+        "description": "1. On a computer, open Chrome or Edge, press **F12** and select the **Console** tab. Leave it open.\n2. In that same tab, open this link and sign in (including the SMS code if Samsung asks):\n\n[Open Samsung sign-in]({sign_in_url})\n\n3. After signing in, the page tries to open an address starting with **ms-app://** and nothing seems to happen. The Console shows a red message like *Failed to launch 'ms-app://…'*. Copy that whole message (or just the ms-app://… address) and paste it below.\n\nIf you don't see it in the Console, look in the **Network** tab (tick *Preserve log* and sign in again) for a request starting with ms-app://.\n\nThe link works once. If it fails, close this dialog and start setup again for a fresh link.",
+        "data": {
+          "redirect_url": "ms-app://… address (or the whole Console message)"
+        }
       }
     },
     "error": {
@@ -79,11 +88,15 @@
       "code_exchange_failed": "Failed to exchange the authorization code. Check your credentials and try again.",
       "samsung_login_failed": "Samsung rejected the Samsung Account login, so camera pictures can't be enabled. This usually means the Samsung signin client secret is missing or wrong, or the account uses 2-step verification. Clear the three Samsung fields to finish setup without camera pictures; the log has Samsung's exact reply.",
       "no_device_found": "No Family Hub fridge with a camera was found in this SmartThings account. Enter the fridge's Device ID manually.",
-      "invalid_image_token": "SmartThings rejected this token. Check you copied it fully and that it hasn't expired."
+      "invalid_image_token": "SmartThings rejected this token. Check you copied it fully and that it hasn't expired.",
+      "samsung_2fa_required": "Samsung accepted your password but wants a 2-step verification (SMS) code, which this login can't enter. Turn off 2-step verification in your Samsung account, set up this integration, then turn it back on; or clear the Samsung fields to set up without camera pictures.",
+      "invalid_samsung_redirect": "That doesn't contain the ms-app://… address Samsung sends after sign-in. Copy the whole address or Console message.",
+      "samsung_browser_failed": "Samsung didn't accept the sign-in result. Start setup again for a fresh link; if it keeps failing, check the log for Samsung's reply."
     },
     "abort": {
       "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
-      "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]"
+      "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]",
+      "samsung_browser_unavailable": "Couldn't reach Samsung's sign-in service. Check the log and try again."
     }
   }
 }

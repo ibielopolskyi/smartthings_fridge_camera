@@ -121,8 +121,9 @@ If you already use Home Assistant's built-in SmartThings integration, pick **"Re
 
 That login cannot download the camera pictures: Samsung serves them from a server that needs a Samsung account identity. To get pictures, fill in **one** of these on the same screen:
 
-- **Picture token**: a personal access token from https://account.smartthings.com/tokens (tick all *Devices* permissions). Samsung makes these expire after 24 hours; when that happens Home Assistant shows a "re-authenticate" notice that only asks for a new token.
+- **Sign in through Samsung's website** (tick the box). Works with 2-step verification and renews itself. The next screen gives you a sign-in link: open it on a computer in Chrome or Edge with the developer tools Console open (F12), sign in, then copy the `ms-app://…` address shown in the Console's red "Failed to launch" message and paste it back. You only do this once.
 - **Samsung Account** email + password (+ signin client secret). Renews itself, but Samsung may reject it (accounts with 2-step verification are not supported).
+- **Picture token**: a personal access token from https://account.smartthings.com/tokens (tick all *Devices* permissions). Samsung makes these expire after 24 hours; when that happens Home Assistant shows a "re-authenticate" notice that only asks for a new token.
 
 If you leave both empty, the integration still works (door sensor, refresh), just without pictures.
 

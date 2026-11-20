@@ -1,0 +1,35 @@
+name: Samsung sign-in check
+
+# Live check that Samsung accepts the integration's sign-in link and shows
+# a sign-in form. Uses only Samsung's public sign-in entry point: no
+# account details or secrets are involved.
+on:
+  workflow_dispatch:
+  push:
+    branches: [ccr-0e6db24b-l1qikt]
+    paths:
+      - custom_components/samsung_familyhub_fridge/samsung_browser_login.py
+      - scripts/check_samsung_signin.py
+      - .github/workflows/samsung-signin-check.yml
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests cryptography playwright==1.48.0
+      - run: python -m playwright install --with-deps chromium
+      - run: python scripts/check_samsung_signin.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: samsung-signin-screenshot
+          path: samsung_signin.png
+          if-no-files-found: ignore
