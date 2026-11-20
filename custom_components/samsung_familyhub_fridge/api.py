@@ -141,7 +141,7 @@ class FamilyHub:
         # Optional SmartThings PAT used only for image downloads.
         self._image_headers: dict | None = None
         # Set once the public files endpoint is confirmed to work.
-        self._use_public_files_api = False
+        self._public_files_accept: str | None = None
 
     def set_samsung_iot_token(
         self,
@@ -179,51 +179,121 @@ class FamilyHub:
         if self.images_unavailable_reason == "image_token_no_samsung_id":
             self.images_unavailable_reason = None
 
-    def _public_file_request(self, file_id: str) -> tuple[str, dict]:
+    # Accept headers to try on the public files endpoint, in order. It
+    # answers 406 to image/* (seen in the wild), so it most likely returns
+    # JSON describing the file rather than the raw bytes.
+    _PUBLIC_FILES_ACCEPTS = (
+        "application/vnd.smartthings+json;v=1",
+        "application/json",
+        "image/jpeg, image/*, application/octet-stream, */*",
+    )
+
+    @staticmethod
+    def _looks_like_image(r: requests.Response) -> bool:
+        content_type = r.headers.get("content-type", "")
+        return (
+            r.ok
+            and bool(r.content)
+            and not content_type.startswith(("application/json", "text/"))
+            and "json" not in content_type
+            and r.content[:1] not in (b"{", b"[", b"<")
+        )
+
+    @staticmethod
+    def _find_urls(obj) -> list[str]:
+        """Return every http(s) URL string found anywhere in a JSON value."""
+        found: list[str] = []
+        if isinstance(obj, dict):
+            for value in obj.values():
+                found.extend(FamilyHub._find_urls(value))
+        elif isinstance(obj, list):
+            for value in obj:
+                found.extend(FamilyHub._find_urls(value))
+        elif isinstance(obj, str) and obj.startswith(("https://", "http://")):
+            found.append(obj)
+        return found
+
+    def _download_public_file(
+        self, file_id: str, accept: str
+    ) -> tuple[bytes | None, str]:
+        """Fetch one picture via api.smartthings.com/v1/devices/{id}/files.
+
+        Handles both a raw image reply and a JSON reply that links to the
+        image. Returns (image bytes or None, diagnostic text for the log).
+        """
         url = (
             f"https://api.smartthings.com/v1/devices/"
             f"{self.device_id}/files/{file_id}"
         )
-        headers = {
-            **self._headers,
-            "Accept": "image/jpeg, image/*, application/octet-stream, */*",
-        }
-        return url, headers
-
-    def _probe_public_files_api(self, file_id: str):
-        """Try the public files endpoint once with the SmartThings token.
-
-        Returns the successful response (and remembers to use this endpoint
-        from now on), or None after marking images unavailable with a log
-        message that includes the server's reply.
-        """
-        url, headers = self._public_file_request(file_id)
+        r = requests.get(
+            url,
+            headers={**self._headers, "Accept": accept},
+            timeout=DEFAULT_TIMEOUT,
+        )
+        if r.status_code in (401, 403):
+            return None, f"HTTP {r.status_code}: {r.text[:300]}"
+        if self._looks_like_image(r):
+            return r.content, "image"
+        content_type = r.headers.get("content-type", "")
+        reply = f"HTTP {r.status_code} {content_type}: {r.text[:500]}"
+        if not r.ok:
+            return None, reply
         try:
-            r = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
-        except requests.RequestException as err:
-            r = None
-            reply = str(err)
-        else:
-            content_type = r.headers.get("content-type", "")
-            looks_like_json = content_type.startswith(
-                "application/json"
-            ) or r.content[:1] in (b"{", b"[")
-            if r.ok and r.content and not looks_like_json:
-                _LOGGER.info(
-                    "Camera images: using the public SmartThings files endpoint"
+            body = r.json()
+        except ValueError:
+            return None, reply
+        links = self._find_urls(body)
+        if not links:
+            return None, f"{reply} (no download link in reply)"
+        for link in links:
+            # Signed links usually reject extra auth; SmartThings links
+            # usually need it. Try both.
+            for headers in ({}, self._headers):
+                try:
+                    lr = requests.get(link, headers=headers, timeout=DEFAULT_TIMEOUT)
+                except requests.RequestException as err:
+                    reply = f"{reply} | link error: {err}"
+                    continue
+                if self._looks_like_image(lr):
+                    return lr.content, "image via link"
+                reply = (
+                    f"{reply} | link {link.split('?')[0]} -> HTTP "
+                    f"{lr.status_code} {lr.headers.get('content-type', '')}"
                 )
-                self._use_public_files_api = True
-                return r
-            reply = f"HTTP {r.status_code} {content_type}: {r.text[:200]}"
+        return None, reply
+
+    def _probe_public_files_api(self, file_id: str) -> bytes | None:
+        """Find a way to get pictures from the public files endpoint.
+
+        Tries each Accept header once. On success remembers it and returns
+        the image bytes; otherwise marks images unavailable and logs every
+        reply so the format can be worked out.
+        """
+        replies = []
+        for accept in self._PUBLIC_FILES_ACCEPTS:
+            try:
+                content, reply = self._download_public_file(file_id, accept)
+            except requests.RequestException as err:
+                content, reply = None, str(err)
+            if content is not None:
+                _LOGGER.info(
+                    "Camera images: using the public SmartThings files "
+                    "endpoint (Accept: %s, %s)",
+                    accept,
+                    reply,
+                )
+                self._public_files_accept = accept
+                return content
+            replies.append(f"[Accept {accept}] {reply}")
         self.images_unavailable_reason = "no_samsung_account"
         _LOGGER.warning(
             "Camera images unavailable: the image server needs a Samsung ID "
             "(\"No samsung id available\") and the public files endpoint did "
-            "not return an image (%s). The SmartThings connection itself is "
-            "working. To get images, add a picture token (a SmartThings "
-            "personal access token) or Samsung Account login to this "
-            "integration.",
-            reply,
+            "not return an image. Replies: %s. The SmartThings connection "
+            "itself is working. To get images, add a picture token (a "
+            "SmartThings personal access token) or Samsung Account login to "
+            "this integration.",
+            " ; ".join(replies),
         )
         return None
 
@@ -373,9 +443,16 @@ class FamilyHub:
                     f"https://client.smartthings.com/udo/file_links/"
                     f"{file_id}?cid={CID}&di={self.device_id}"
                 )
-                if self._use_public_files_api:
-                    url, dl_headers = self._public_file_request(file_id)
-                elif self._samsung_iot_headers:
+                if self._public_files_accept:
+                    content, reply = self._download_public_file(
+                        file_id, self._public_files_accept
+                    )
+                    if content is None:
+                        raise RuntimeError(f"public files endpoint: {reply}")
+                    result[idx] = content
+                    successes += 1
+                    continue
+                if self._samsung_iot_headers:
                     # Samsung Account IoT token (email/password login).
                     dl_headers = self._samsung_iot_headers
                 elif self._image_headers:
@@ -439,10 +516,12 @@ class FamilyHub:
                     # The SmartThings token is fine; the image server just
                     # needs a Samsung identity. Reauth would not help, so try
                     # the public files endpoint once, else disable images.
-                    r = self._probe_public_files_api(file_id)
-                    if r is None:
+                    content = self._probe_public_files_api(file_id)
+                    if content is None:
                         return False
-                    url = r.url
+                    result[idx] = content
+                    successes += 1
+                    continue
                 self._check_response(r)
                 content_type = r.headers.get("content-type", "")
                 _LOGGER.debug(

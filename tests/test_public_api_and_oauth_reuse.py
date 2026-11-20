@@ -387,3 +387,41 @@ async def test_reauth_with_picture_token_asks_only_for_new_token():
     assert result["type"] == "abort"
     assert result["data"]["image_token"] == "new"
     assert result["data"][CONF_AUTH_MODE] == AUTH_MODE_OAUTH
+
+
+def test_public_files_json_with_download_link_is_followed():
+    hub = _image_hub()
+    link = "https://files.example.com/f1.jpg?sig=abc"
+    with rm.Mocker() as m:
+        m.get(FILE_LINKS, status_code=400, json=NO_SAMSUNG_ID)
+        m.get(
+            PUBLIC_FILE,
+            json={"fileId": "f1", "links": {"download": {"href": link}}},
+            headers={"content-type": "application/json"},
+        )
+        m.get(link, content=b"\xff\xd8JPEG", headers={"content-type": "image/jpeg"})
+        assert hub.download_images() is True
+        assert hub.downloaded_images[0] == b"\xff\xd8JPEG"
+        assert hub._public_files_accept == "application/vnd.smartthings+json;v=1"
+        # Later polls go straight to the public endpoint with that Accept.
+        m.reset_mock()
+        assert hub.download_images() is True
+        assert m.request_history[0].url.startswith(PUBLIC_FILE)
+        assert m.request_history[0].headers["Accept"] == (
+            "application/vnd.smartthings+json;v=1"
+        )
+
+
+def test_public_files_406_everywhere_logs_all_replies(caplog):
+    hub = _image_hub()
+    not_acceptable = {"error": {"code": "NotAcceptableError",
+                                "message": "Not acceptable"}}
+    with rm.Mocker() as m:
+        m.get(FILE_LINKS, status_code=400, json=NO_SAMSUNG_ID)
+        m.get(PUBLIC_FILE, status_code=406, json=not_acceptable,
+              headers={"content-type": "application/json"})
+        assert hub.download_images() is False
+        tried = [r.headers["Accept"] for r in m.request_history[1:]]
+    assert tried == list(FamilyHub._PUBLIC_FILES_ACCEPTS)
+    assert hub.images_unavailable_reason == "no_samsung_account"
+    assert "NotAcceptableError" in caplog.text
