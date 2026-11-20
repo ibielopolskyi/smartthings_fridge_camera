@@ -255,9 +255,14 @@ class FamilyHubFridgeCardEditor extends HTMLElement {
   }
 
   set hass(hass) {
-    const first = !this._hass;
     this._hass = hass;
-    if (first) this._render();
+    // Re-render only when the list of fridges changes (e.g. it arrives
+    // after the editor opens), so typing in the fields isn't interrupted.
+    const key = Object.keys(findFridges(hass)).join(",");
+    if (key !== this._fridgeKey) {
+      this._fridgeKey = key;
+      this._render();
+    }
   }
 
   _changed(key, value) {
@@ -276,21 +281,23 @@ class FamilyHubFridgeCardEditor extends HTMLElement {
     const wrap = document.createElement("div");
     wrap.style.cssText = "display:flex;flex-direction:column;gap:12px;";
 
-    const fridges = findFridges(this._hass);
-    const select = document.createElement("select");
-    const auto = document.createElement("option");
-    auto.value = "";
-    auto.textContent = "First fridge found";
-    select.appendChild(auto);
-    for (const id of Object.keys(fridges)) {
-      const opt = document.createElement("option");
-      opt.value = id;
-      opt.textContent = deviceName(this._hass, id);
-      if (id === this._config.device_id) opt.selected = true;
-      select.appendChild(opt);
+    // Only offer a choice when there is one to make.
+    const ids = Object.keys(findFridges(this._hass));
+    if (ids.length > 1) {
+      const current = ids.includes(this._config.device_id)
+        ? this._config.device_id
+        : ids[0];
+      const select = document.createElement("select");
+      for (const id of ids) {
+        const opt = document.createElement("option");
+        opt.value = id;
+        opt.textContent = deviceName(this._hass, id);
+        opt.selected = id === current;
+        select.appendChild(opt);
+      }
+      select.addEventListener("change", () => this._changed("device_id", select.value));
+      wrap.appendChild(this._labelled("Fridge", select));
     }
-    select.addEventListener("change", () => this._changed("device_id", select.value));
-    wrap.appendChild(this._labelled("Fridge", select));
 
     const title = document.createElement("input");
     title.type = "text";

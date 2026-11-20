@@ -168,7 +168,7 @@ The integration includes its own card; nothing extra to install. Edit a dashboar
 ```yaml
 type: custom:familyhub-fridge-card
 # optional:
-# device_id: <fridge device ID, if you have several; defaults to the first>
+# device_id: <only needed with several fridges; pick it in the card editor>
 # title: Kitchen fridge
 # show_header: false
 ```
