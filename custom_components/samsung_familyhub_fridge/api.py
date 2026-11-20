@@ -63,8 +63,16 @@ def camera_related_status(full_status: dict) -> dict:
     for comp_name, caps in components.items():
         if not isinstance(caps, dict):
             continue
+        camera_component = bool(CAMERA_KEYWORDS.search(comp_name))
         for cap_name, attrs in caps.items():
-            if CAMERA_KEYWORDS.search(cap_name):
+            # Everything in a camera component (e.g. camera-01's on/off
+            # switch), camera-looking capabilities, and every door sensor
+            # (photos are taken when a door closes).
+            if (
+                camera_component
+                or CAMERA_KEYWORDS.search(cap_name)
+                or cap_name == "contactSensor"
+            ):
                 found[f"{comp_name}/{cap_name}"] = attrs
     return found
 
