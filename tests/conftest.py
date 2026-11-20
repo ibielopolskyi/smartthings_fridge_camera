@@ -326,6 +326,10 @@ ha_helpers_update_coordinator = _make_module(
     CoordinatorEntity=_CoordinatorEntity,
     UpdateFailed=Exception,
 )
+ha_helpers_event = _make_module(
+    "homeassistant.helpers.event",
+    async_track_time_interval=MagicMock(return_value=lambda: None),
+)
 ha_helpers_entity_platform = _make_module(
     "homeassistant.helpers.entity_platform",
     AddEntitiesCallback=MagicMock,
@@ -413,6 +417,7 @@ _modules = {
     "homeassistant.helpers": ha_helpers,
     "homeassistant.helpers.update_coordinator": ha_helpers_update_coordinator,
     "homeassistant.helpers.entity_platform": ha_helpers_entity_platform,
+    "homeassistant.helpers.event": ha_helpers_event,
     "homeassistant.helpers.dispatcher": ha_helpers_dispatcher,
     "homeassistant.helpers.typing": ha_helpers_typing,
     "homeassistant.helpers.config_entry_oauth2_flow": ha_helpers_oauth2,
